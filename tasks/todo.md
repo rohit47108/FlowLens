@@ -9,7 +9,7 @@ The detailed acceptance and verification steps for the active phase live under `
 - [x] Verify initial stack choices against current primary documentation and registry compatibility.
 - [x] Record risks, design specification, ADRs, and requirement matrix.
 - [x] Complete the bounded adversarial architecture review and record rulings.
-- [ ] Commit and push Phase 0 artifacts.
+- [x] Commit and push Phase 0 artifacts.
 
 ## Phase 1: Canonical foundation
 

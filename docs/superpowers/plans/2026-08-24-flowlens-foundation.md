@@ -42,6 +42,7 @@ tests/integration/                   adapter and recovery behavior
 
 - Create: `package.json`
 - Create: `package-lock.json`
+- Create: `.npmrc`
 - Create: `tsconfig.json`
 - Create: `vite.config.ts`
 - Create: `eslint.config.js`
@@ -53,7 +54,7 @@ tests/integration/                   adapter and recovery behavior
 
 - [ ] **Step 1: Create the exact manifest**
 
-Use `npm install --save-exact` for runtime packages and `npm install --save-dev --save-exact` for development packages. Set:
+Create `.npmrc` with `ignore-scripts=true` before the first install. This fail-closed policy prevents dependency lifecycle scripts from executing while leaving explicitly invoked project scripts available. Use `npm install --save-exact` for runtime packages and `npm install --save-dev --save-exact` for development packages. Set:
 
 ```json
 {
@@ -102,17 +103,19 @@ Run:
 
 ```powershell
 npm ci
+npm audit signatures
+npm audit --audit-level=high
 npm run typecheck
 npm run lint
 ```
 
-Expected: commands execute with zero peer-dependency warnings attributable to the selected React, R3F, TypeScript, ESLint, and Node versions. Type checking may report missing application entry files until Task 2; configuration itself must parse.
+Expected: install-time lifecycle scripts remain suppressed, registry signatures/provenance verify, no high-severity advisory is present, and commands execute with zero peer-dependency warnings attributable to the selected React, R3F, TypeScript, ESLint, and Node versions. Type checking may report missing application entry files until Task 2; configuration itself must parse.
 
 - [ ] **Step 5: Inspect and commit**
 
 ```powershell
 git diff --check
-git add package.json package-lock.json tsconfig.json vite.config.ts eslint.config.js
+git add package.json package-lock.json .npmrc tsconfig.json vite.config.ts eslint.config.js
 git diff --staged
 git commit -m "chore: add application toolchain"
 git push -u origin codex/flowlens-build
@@ -701,6 +704,7 @@ git push
 ## Foundation checkpoint
 
 - [ ] `npm ci` succeeds from the committed lockfile on Node 24.
+- [ ] Dependency lifecycle scripts remain suppressed and npm registry signatures/provenance verify.
 - [ ] `npm run check` passes.
 - [ ] Focused property and integration suites prove units, transforms, schemas, command idempotency/inverses, lease fencing, staged operations, constraints, determinism, claim resolution/invalidation, stale runs, source integrity, bounded ingestion, repository conflicts, migration/package safety, worker lifecycle, backend capabilities, central admissibility, recommendation traceability, and experiment immutability.
 - [ ] A real Chromium run confirms the hash/PRNG vectors and minimal application shell.
