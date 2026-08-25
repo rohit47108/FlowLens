@@ -1,0 +1,172 @@
+:root {
+  color-scheme: light;
+  --color-canvas: #f2f5f3;
+  --color-surface: #ffffff;
+  --color-surface-subtle: #e8eeea;
+  --color-ink: #14201b;
+  --color-ink-muted: #4c5b53;
+  --color-border: #7d8c83;
+  --color-border-subtle: #c8d1cc;
+  --color-primary: #0b6b61;
+  --color-primary-strong: #074e47;
+  --color-selection: #d7eee9;
+  --color-info: #005fcc;
+  --color-warning: #8a5200;
+  --color-danger: #a32824;
+  --color-on-primary: #ffffff;
+  --space-1: 0.125rem;
+  --space-2: 0.25rem;
+  --space-3: 0.5rem;
+  --space-4: 0.75rem;
+  --space-5: 1rem;
+  --space-6: 1.5rem;
+  --space-7: 2rem;
+  --radius-control: 0.25rem;
+  --radius-panel: 0.5rem;
+  --radius-overlay: 0.75rem;
+  --shadow-overlay: 0 0.75rem 2rem rgb(20 32 27 / 0.16);
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: Aptos, "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-synthesis: none;
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--color-canvas);
+}
+
+body {
+  margin: 0;
+  min-inline-size: 20rem;
+  overflow-wrap: anywhere;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+a {
+  color: var(--color-primary);
+}
+
+a:hover {
+  color: var(--color-primary-strong);
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-info);
+  outline-offset: 2px;
+}
+
+.skip-link {
+  background: var(--color-surface);
+  color: var(--color-ink);
+  left: var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  position: fixed;
+  top: var(--space-5);
+  transform: translateY(-200%);
+  z-index: 1;
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+.application-header {
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-4) var(--space-5);
+}
+
+.application-label {
+  color: var(--color-ink-muted);
+  font-family: Bahnschrift, "Arial Narrow", "Segoe UI", sans-serif;
+  margin: 0;
+}
+
+main {
+  margin-inline: auto;
+  max-inline-size: 48rem;
+  padding: var(--space-7) var(--space-5);
+}
+
+h1,
+h2,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-family: Bahnschrift, "Arial Narrow", "Segoe UI", sans-serif;
+  font-size: 2rem;
+  line-height: 1.2;
+}
+
+h2 {
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+h1 + p,
+p + p,
+section {
+  margin-block-start: var(--space-5);
+}
+
+section {
+  background: var(--color-surface-subtle);
+  border-inline-start: 3px solid var(--color-border);
+  padding: var(--space-5);
+}
+
+section p {
+  color: var(--color-ink-muted);
+  margin-block-start: var(--space-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  :root {
+    --color-canvas: Canvas;
+    --color-surface: Canvas;
+    --color-surface-subtle: Canvas;
+    --color-ink: CanvasText;
+    --color-ink-muted: CanvasText;
+    --color-border: CanvasText;
+    --color-border-subtle: CanvasText;
+    --color-primary: LinkText;
+    --color-primary-strong: LinkText;
+    --color-selection: Highlight;
+    --color-info: Highlight;
+    --color-warning: CanvasText;
+    --color-danger: CanvasText;
+    --color-on-primary: Canvas;
+  }
+
+  .application-header,
+  section {
+    border-color: CanvasText;
+  }
+
+  :focus-visible {
+    outline-color: Highlight;
+  }
+}
