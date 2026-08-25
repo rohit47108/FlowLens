@@ -4,7 +4,6 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   plugins: [react()],
   test: {
-    passWithNoTests: true,
     coverage: {
       provider: "v8",
       include: ["src/domain/**/*.{ts,tsx}"],
@@ -22,14 +21,23 @@ export default defineConfig({
         test: {
           name: "unit",
           environment: "node",
-          include: ["tests/unit/**/*.{test,spec}.ts"],
+          include: [
+            "src/**/*.test.ts",
+            "src/**/*.spec.ts",
+            "tests/unit/**/*.{test,spec}.ts",
+            "tests/integration/**/*.{test,spec}.ts",
+          ],
         },
       },
       {
         test: {
           name: "ui",
           environment: "jsdom",
-          include: ["tests/ui/**/*.{test,spec}.{ts,tsx}"],
+          include: [
+            "src/**/*.test.tsx",
+            "src/**/*.spec.tsx",
+            "tests/ui/**/*.{test,spec}.{ts,tsx}",
+          ],
         },
       },
     ],
