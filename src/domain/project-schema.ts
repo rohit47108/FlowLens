@@ -632,6 +632,144 @@ export type ParseResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: BoundaryValidationError };
 
+type SanitizedPrimitive = null | boolean | number | string;
+type SanitizedValue = SanitizedPrimitive | SanitizedValue[] | SanitizedRecord;
+type SanitizedArray = SanitizedValue[];
+interface SanitizedRecord {
+  [key: string]: SanitizedValue;
+}
+type SanitizationResult =
+  | { readonly ok: true; readonly value: SanitizedValue }
+  | { readonly ok: false };
+
+function sanitized(value: SanitizedValue): SanitizationResult {
+  return { ok: true, value };
+}
+
+const rejectedSanitization: SanitizationResult = { ok: false };
+
+function isDataDescriptor(
+  descriptor: PropertyDescriptor | undefined,
+): descriptor is PropertyDescriptor & { readonly value: unknown } {
+  return (
+    descriptor !== undefined &&
+    descriptor.get === undefined &&
+    descriptor.set === undefined &&
+    Object.hasOwn(descriptor, "value")
+  );
+}
+
+function isCanonicalArrayIndex(key: string, length: number): boolean {
+  const index = Number(key);
+  return (
+    Number.isSafeInteger(index) &&
+    index >= 0 &&
+    index < length &&
+    String(index) === key
+  );
+}
+
+function sanitizeArray(
+  input: unknown[],
+  ancestors: ReadonlySet<object>,
+): SanitizationResult {
+  if (Object.getPrototypeOf(input) !== Array.prototype) {
+    return rejectedSanitization;
+  }
+
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(input, "length");
+  if (
+    !isDataDescriptor(lengthDescriptor) ||
+    lengthDescriptor.enumerable ||
+    typeof lengthDescriptor.value !== "number" ||
+    !Number.isSafeInteger(lengthDescriptor.value) ||
+    lengthDescriptor.value < 0 ||
+    lengthDescriptor.value > MAX_COLLECTION_LENGTH
+  ) {
+    return rejectedSanitization;
+  }
+
+  const length = lengthDescriptor.value;
+  const keys = Reflect.ownKeys(input);
+  if (keys.length !== length + 1) {
+    return rejectedSanitization;
+  }
+
+  const output: SanitizedArray = [];
+  for (let index = 0; index < length; index += 1) {
+    const key = String(index);
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (
+      !isDataDescriptor(descriptor) ||
+      !descriptor.enumerable ||
+      !isCanonicalArrayIndex(key, length)
+    ) {
+      return rejectedSanitization;
+    }
+    const child = sanitizeInput(descriptor.value, ancestors);
+    if (!child.ok) {
+      return rejectedSanitization;
+    }
+    output.push(child.value);
+  }
+  return sanitized(output);
+}
+
+function sanitizeRecord(
+  input: object,
+  ancestors: ReadonlySet<object>,
+): SanitizationResult {
+  const prototype = Object.getPrototypeOf(input);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return rejectedSanitization;
+  }
+
+  const output: SanitizedRecord = Object.create(null);
+  for (const key of Reflect.ownKeys(input)) {
+    if (typeof key !== "string") {
+      return rejectedSanitization;
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (!isDataDescriptor(descriptor) || !descriptor.enumerable) {
+      return rejectedSanitization;
+    }
+    const child = sanitizeInput(descriptor.value, ancestors);
+    if (!child.ok) {
+      return rejectedSanitization;
+    }
+    Object.defineProperty(output, key, {
+      value: child.value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return sanitized(output);
+}
+
+function sanitizeInput(
+  input: unknown,
+  ancestors: ReadonlySet<object> = new Set(),
+): SanitizationResult {
+  if (
+    input === null ||
+    typeof input === "boolean" ||
+    typeof input === "number" ||
+    typeof input === "string"
+  ) {
+    return sanitized(input);
+  }
+  if (typeof input !== "object" || ancestors.has(input)) {
+    return rejectedSanitization;
+  }
+
+  const nextAncestors = new Set(ancestors);
+  nextAncestors.add(input);
+  return Array.isArray(input)
+    ? sanitizeArray(input, nextAncestors)
+    : sanitizeRecord(input, nextAncestors);
+}
+
 function normalizedPath(issue: ZodIssue): readonly (string | number)[] {
   return issue.path.filter(
     (segment): segment is string | number =>
@@ -741,13 +879,27 @@ function boundaryError(
   return new BoundaryValidationError("INVALID_PROJECT", path);
 }
 
+/**
+ * Hostile trust-boundary entrypoint. Public schemas remain composable, while
+ * this function accepts only sanitized own-data JSON-shaped project graphs.
+ */
 export function parseProject(input: unknown): ParseResult<Project> {
   try {
-    const result = ProjectSchema.safeParse(input);
+    const sanitizedInput = sanitizeInput(input);
+    if (!sanitizedInput.ok) {
+      return {
+        ok: false,
+        error: new BoundaryValidationError("INVALID_PROJECT", []),
+      };
+    }
+    const result = ProjectSchema.safeParse(sanitizedInput.value);
     if (result.success) {
       return { ok: true, value: result.data };
     }
-    return { ok: false, error: boundaryError(input, result.error.issues[0]!) };
+    return {
+      ok: false,
+      error: boundaryError(sanitizedInput.value, result.error.issues[0]!),
+    };
   } catch {
     return {
       ok: false,

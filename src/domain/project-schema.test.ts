@@ -76,7 +76,129 @@ function occupantEntity(extra: Readonly<Record<string, unknown>> = {}) {
   };
 }
 
+function expectPreflightRejection(input: unknown, hostileText: string): void {
+  const error = invalidResult(input);
+
+  expect(error.code).toBe("INVALID_PROJECT");
+  expect(error.path).toEqual([]);
+  expect(JSON.stringify(error)).not.toContain(hostileText);
+  expect(error.message).not.toContain(hostileText);
+}
+
 describe("canonical project schema", () => {
+  it("rejects inherited root fields before schema validation", () => {
+    const input = Object.create(minimalProject);
+
+    expectPreflightRejection(input, "project-synthetic-001");
+  });
+
+  it("rejects inherited spatial entity fields before schema validation", () => {
+    const input = structuredClone(minimalProject);
+    setAtPath(
+      input,
+      ["rooms", 0, "entities", 0],
+      Object.create(input.rooms[0].entities[0]),
+    );
+
+    expectPreflightRejection(input, "entity-synthetic-001");
+  });
+
+  it("rejects enumerable getters without reading them", () => {
+    const input = structuredClone(minimalProject);
+    let reads = 0;
+    Object.defineProperty(input, "projectId", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        reads += 1;
+        return "project-synthetic-001";
+      },
+    });
+
+    expectPreflightRejection(input, "project-synthetic-001");
+    expect(reads).toBe(0);
+    expect(
+      Object.getOwnPropertyDescriptor(input, "projectId")?.get,
+    ).toBeDefined();
+  });
+
+  it.each([
+    (input: object) => {
+      Object.defineProperty(input, "hostile-key", {
+        enumerable: false,
+        value: "DO_NOT_LEAK_NON_ENUMERABLE",
+      });
+      return "DO_NOT_LEAK_NON_ENUMERABLE";
+    },
+    (input: object) => {
+      (input as Record<PropertyKey, unknown>)[Symbol("hostile-key")] =
+        "DO_NOT_LEAK_SYMBOL";
+      return "DO_NOT_LEAK_SYMBOL";
+    },
+  ])(
+    "rejects symbol and non-enumerable properties without leaking data",
+    (mutate) => {
+      const input = structuredClone(minimalProject);
+
+      expectPreflightRejection(input, mutate(input));
+    },
+  );
+
+  it.each([
+    (input: object) => {
+      setAtPath(input, ["preferences"], new Date("2026-08-25T00:00:00Z"));
+      return "2026-08-25";
+    },
+    (input: object) => {
+      const custom = Object.assign(Object.create({ inherited: true }), {
+        defaultUnitSystem: "SI",
+        localOnly: true,
+        redactExportsByDefault: true,
+      });
+      setAtPath(input, ["preferences"], custom);
+      return "inherited";
+    },
+  ])("rejects nested custom-prototype values", (mutate) => {
+    const input = structuredClone(minimalProject);
+
+    expectPreflightRejection(input, mutate(input));
+  });
+
+  it.each([
+    (input: object) => {
+      const sparseRooms = new Array(2);
+      sparseRooms[0] = structuredClone(minimalProject.rooms[0]);
+      setAtPath(input, ["rooms"], sparseRooms);
+      return "sparse";
+    },
+    (input: object) => {
+      const rooms = structuredClone(minimalProject.rooms);
+      Object.defineProperty(rooms, "hostile-key", {
+        enumerable: true,
+        value: "DO_NOT_LEAK_ARRAY_PROPERTY",
+      });
+      setAtPath(input, ["rooms"], rooms);
+      return "DO_NOT_LEAK_ARRAY_PROPERTY";
+    },
+  ])("rejects sparse and extra-property arrays", (mutate) => {
+    const input = structuredClone(minimalProject);
+
+    expectPreflightRejection(input, mutate(input));
+  });
+
+  it("accepts a null-prototype root with ordinary nested project data", () => {
+    const input = Object.assign(
+      Object.create(null),
+      structuredClone(minimalProject),
+    );
+    const original = structuredClone(input);
+
+    const result = parseProject(input);
+
+    expect(result.ok).toBe(true);
+    expect(input).toEqual(original);
+  });
+
   it("parses the deterministic synthetic fixture without mutating it", () => {
     const input = structuredClone(minimalProject);
     const original = structuredClone(input);
