@@ -12,6 +12,7 @@ import { makeTransform, WORLD_FRAME_VERSION } from "./spatial";
 import {
   cadr,
   cubicMetresPerSecond,
+  feetToMetres,
   metres,
   schedule,
   supportedUncertainty,
@@ -31,17 +32,46 @@ const FORBIDDEN_OCCUPANT_KEYS = new Set([
   "patient",
 ]);
 
-const finiteSafeNumber = z
+const rawFiniteSafeNumber = z
   .number()
   .finite()
   .gte(-Number.MAX_SAFE_INTEGER)
   .lte(Number.MAX_SAFE_INTEGER);
-const nonNegativeFiniteSafeNumber = finiteSafeNumber.gte(0);
-const positiveFiniteSafeNumber = finiteSafeNumber.gt(0);
+const normalizeNegativeZero = (value: number): number =>
+  value === 0 ? 0 : value;
+const finiteSafeNumber = rawFiniteSafeNumber.transform(normalizeNegativeZero);
+const nonNegativeFiniteSafeNumber = rawFiniteSafeNumber
+  .gte(0)
+  .transform(normalizeNegativeZero);
+const positiveFiniteSafeNumber = rawFiniteSafeNumber
+  .gt(0)
+  .transform(normalizeNegativeZero);
+
+function containsControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (
+      codePoint !== undefined &&
+      (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const boundedText = z
   .string()
   .min(1)
   .max(MAX_TEXT_LENGTH)
+  .refine(
+    (value) => !containsControlCharacter(value),
+    "Text must not contain control characters.",
+  )
+  .refine(
+    (value) => value.trim().length > 0,
+    "Text must not be whitespace only.",
+  )
   .refine(
     (value) => value === value.normalize("NFC"),
     "Text must use Unicode NFC.",
@@ -50,6 +80,10 @@ const boundedIdentifier = z
   .string()
   .min(1)
   .max(MAX_IDENTIFIER_LENGTH)
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9._:-]*$/,
+    "Identifier must use the portable ASCII syntax.",
+  )
   .refine(
     (value) => value === value.normalize("NFC"),
     "Identifier must use Unicode NFC.",
@@ -245,35 +279,153 @@ export const EvidenceCategorySchema = z.enum([
   "RECOMMENDED",
 ]);
 
+const CalibrationEvidenceIdSchema = EvidenceIdSchema.nullable();
+const SourcePrecisionSchema = nonNegativeFiniteSafeNumber;
+
+const LengthSourceSchema = z
+  .strictObject({
+    value: nonNegativeFiniteSafeNumber,
+    unit: z.enum(["m", "ft"]),
+    precision: SourcePrecisionSchema,
+    calibrationEvidenceId: CalibrationEvidenceIdSchema,
+  })
+  .readonly();
+const ScalarSourceSchema = <Unit extends "s" | "m3/s">(
+  unit: Unit,
+  value: z.ZodType<number>,
+) =>
+  z
+    .strictObject({
+      value,
+      unit: z.literal(unit),
+      precision: SourcePrecisionSchema,
+      calibrationEvidenceId: CalibrationEvidenceIdSchema,
+    })
+    .readonly();
+
+const LengthQuantitySchema = z
+  .strictObject({
+    kind: z.literal("LENGTH"),
+    value: nonNegativeFiniteSafeNumber,
+    unit: z.literal("m"),
+    source: LengthSourceSchema,
+  })
+  .superRefine((value, context) => {
+    const canonical =
+      value.source.unit === "ft"
+        ? feetToMetres.withProvenance(
+            value.source.value,
+            value.source.precision,
+          ).canonical
+        : metres(value.source.value);
+    if (value.value !== canonical) {
+      context.addIssue({
+        code: "custom",
+        message: "INVALID_QUANTITY_PROVENANCE",
+      });
+    }
+  })
+  .transform((value) => {
+    const converted =
+      value.source.unit === "ft"
+        ? feetToMetres.withProvenance(
+            value.source.value,
+            value.source.precision,
+          )
+        : {
+            canonical: metres(value.source.value),
+            source: {
+              value: value.source.value,
+              unit: "m" as const,
+              precision: value.source.precision,
+            },
+          };
+    return {
+      kind: value.kind,
+      value: converted.canonical,
+      unit: value.unit,
+      source: {
+        ...converted.source,
+        calibrationEvidenceId: value.source.calibrationEvidenceId,
+      },
+    };
+  })
+  .readonly();
+
+const TimeQuantitySchema = z
+  .strictObject({
+    kind: z.literal("TIME"),
+    value: positiveFiniteSafeNumber,
+    unit: z.literal("s"),
+    source: ScalarSourceSchema("s", positiveFiniteSafeNumber),
+  })
+  .superRefine((value, context) => {
+    if (value.value !== value.source.value) {
+      context.addIssue({
+        code: "custom",
+        message: "INVALID_QUANTITY_PROVENANCE",
+      });
+    }
+  })
+  .transform((value) => ({
+    kind: value.kind,
+    value: timeSeconds(value.source.value),
+    unit: value.unit,
+    source: value.source,
+  }))
+  .readonly();
+
+const VolumetricFlowQuantitySchema = z
+  .strictObject({
+    kind: z.literal("VOLUMETRIC_FLOW"),
+    value: nonNegativeFiniteSafeNumber,
+    unit: z.literal("m3/s"),
+    source: ScalarSourceSchema("m3/s", nonNegativeFiniteSafeNumber),
+  })
+  .superRefine((value, context) => {
+    if (value.value !== value.source.value) {
+      context.addIssue({
+        code: "custom",
+        message: "INVALID_QUANTITY_PROVENANCE",
+      });
+    }
+  })
+  .transform((value) => ({
+    kind: value.kind,
+    value: cubicMetresPerSecond(value.source.value),
+    unit: value.unit,
+    source: value.source,
+  }))
+  .readonly();
+
+const CadrQuantitySchema = z
+  .strictObject({
+    kind: z.literal("CADR"),
+    value: nonNegativeFiniteSafeNumber,
+    unit: z.literal("m3/s"),
+    source: ScalarSourceSchema("m3/s", nonNegativeFiniteSafeNumber),
+  })
+  .superRefine((value, context) => {
+    if (value.value !== value.source.value) {
+      context.addIssue({
+        code: "custom",
+        message: "INVALID_QUANTITY_PROVENANCE",
+      });
+    }
+  })
+  .transform((value) => ({
+    kind: value.kind,
+    value: cadr(value.source.value),
+    unit: value.unit,
+    source: value.source,
+  }))
+  .readonly();
+
 const QuantitySchema = z.discriminatedUnion("kind", [
-  z
-    .strictObject({
-      kind: z.literal("LENGTH"),
-      value: finiteSafeNumber.transform(metres),
-      unit: z.literal("m"),
-    })
-    .readonly(),
-  z
-    .strictObject({
-      kind: z.literal("TIME"),
-      value: positiveFiniteSafeNumber.transform(timeSeconds),
-      unit: z.literal("s"),
-    })
-    .readonly(),
-  z
-    .strictObject({
-      kind: z.literal("VOLUMETRIC_FLOW"),
-      value: nonNegativeFiniteSafeNumber.transform(cubicMetresPerSecond),
-      unit: z.literal("m3/s"),
-    })
-    .readonly(),
-  z
-    .strictObject({
-      kind: z.literal("CADR"),
-      value: nonNegativeFiniteSafeNumber.transform(cadr),
-      unit: z.literal("m3/s"),
-    })
-    .readonly(),
+  LengthQuantitySchema,
+  TimeQuantitySchema,
+  VolumetricFlowQuantitySchema,
+  CadrQuantitySchema,
 ]);
 
 const UncertaintySchema = z
@@ -324,7 +476,6 @@ const DirectDerivationSchema = z
   .strictObject({
     kind: z.literal("DIRECT"),
     method: boundedText,
-    inputClaimIds: z.array(ClaimIdSchema).max(MAX_COLLECTION_LENGTH).readonly(),
   })
   .readonly();
 const RecommendationDerivationSchema = z
@@ -348,7 +499,10 @@ export const ClaimSchema = z
     subject: ClaimSubjectSchema,
     quantity: QuantitySchema,
     category: EvidenceCategorySchema,
-    confidence: finiteSafeNumber.gte(0).lte(1),
+    confidence: rawFiniteSafeNumber
+      .gte(0)
+      .lte(1)
+      .transform(normalizeNegativeZero),
     uncertainty: UncertaintySchema,
     evidenceIds: z
       .array(EvidenceIdSchema)
@@ -492,19 +646,47 @@ function pathContains(
   return path.some((value) => value === segment);
 }
 
-function boundaryError(issue: ZodIssue): BoundaryValidationError {
+function recordAtPath(
+  input: unknown,
+  path: readonly (string | number)[],
+): Readonly<Record<string, unknown>> | undefined {
+  let current: unknown = input;
+  for (const segment of path) {
+    if (current === null || typeof current !== "object") {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[String(segment)];
+  }
+  return current !== null && typeof current === "object"
+    ? (current as Readonly<Record<string, unknown>>)
+    : undefined;
+}
+
+function hasTrustedLiteralAtPath(
+  input: unknown,
+  path: readonly (string | number)[],
+  field: string,
+  literal: string,
+): boolean {
+  return recordAtPath(input, path)?.[field] === literal;
+}
+
+function boundaryError(
+  input: unknown,
+  issue: ZodIssue,
+): BoundaryValidationError {
   const path = normalizedPath(issue);
   if (issue.code === "unrecognized_keys") {
     const forbiddenKey = issue.keys.find((key) =>
       FORBIDDEN_OCCUPANT_KEYS.has(key),
     );
-    if (forbiddenKey !== undefined && pathContains(path, "entities")) {
+    if (
+      forbiddenKey !== undefined &&
+      hasTrustedLiteralAtPath(input, path, "type", "OCCUPANT")
+    ) {
       return new BoundaryValidationError("FORBIDDEN_OCCUPANT_ATTRIBUTE", path);
     }
-    return new BoundaryValidationError("UNKNOWN_FIELD", [
-      ...path,
-      ...[...issue.keys].sort().slice(0, 1),
-    ]);
+    return new BoundaryValidationError("UNKNOWN_FIELD", [...path, "$unknown"]);
   }
   if (path.length === 1 && path[0] === "schemaVersion") {
     return new BoundaryValidationError("UNKNOWN_SCHEMA_VERSION", path);
@@ -521,7 +703,16 @@ function boundaryError(issue: ZodIssue): BoundaryValidationError {
   if (path.at(-1) === "confidence") {
     return new BoundaryValidationError("INVALID_CLAIM_CONFIDENCE", path);
   }
-  if (issue.message === "MISSING_RECOMMENDATION_DERIVATION") {
+  if (
+    issue.message === "MISSING_RECOMMENDATION_DERIVATION" ||
+    (path.at(-1) === "derivation" &&
+      hasTrustedLiteralAtPath(
+        input,
+        path.slice(0, -1),
+        "category",
+        "RECOMMENDED",
+      ))
+  ) {
     return new BoundaryValidationError(
       "MISSING_RECOMMENDATION_DERIVATION",
       path,
@@ -529,6 +720,16 @@ function boundaryError(issue: ZodIssue): BoundaryValidationError {
   }
   if (issue.message === "INVALID_CLAIM_DERIVATION") {
     return new BoundaryValidationError("INVALID_CLAIM_DERIVATION", path);
+  }
+  if (
+    issue.message === "INVALID_QUANTITY_PROVENANCE" ||
+    pathContains(path, "quantity")
+  ) {
+    const quantityIndex = path.indexOf("quantity");
+    return new BoundaryValidationError(
+      "INVALID_QUANTITY_PROVENANCE",
+      path.slice(0, quantityIndex + 1),
+    );
   }
   if (pathContains(path, "availability")) {
     const availabilityIndex = path.indexOf("availability");
@@ -546,7 +747,7 @@ export function parseProject(input: unknown): ParseResult<Project> {
     if (result.success) {
       return { ok: true, value: result.data };
     }
-    return { ok: false, error: boundaryError(result.error.issues[0]!) };
+    return { ok: false, error: boundaryError(input, result.error.issues[0]!) };
   } catch {
     return {
       ok: false,

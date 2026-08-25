@@ -35,6 +35,47 @@ function setAtPath(
   (current as Record<string, unknown>)[String(finalSegment)] = value;
 }
 
+function deleteAtPath(input: object, path: readonly (string | number)[]): void {
+  const finalSegment = path.at(-1);
+  if (finalSegment === undefined) {
+    throw new Error("A mutation path must not be empty.");
+  }
+
+  let current: unknown = input;
+  for (const segment of path.slice(0, -1)) {
+    if (current === null || typeof current !== "object") {
+      throw new Error("A mutation path must resolve to an object.");
+    }
+    current = (current as Record<string, unknown>)[String(segment)];
+  }
+  if (current === null || typeof current !== "object") {
+    throw new Error("A mutation path must resolve to an object.");
+  }
+  delete (current as Record<string, unknown>)[String(finalSegment)];
+}
+
+function occupantEntity(extra: Readonly<Record<string, unknown>> = {}) {
+  return {
+    type: "OCCUPANT",
+    entityId: "entity-occupant-001",
+    label: "Occupant marker",
+    transform: {
+      position: { x: 1, y: 0, z: 1 },
+      rotation: { x: 0, y: 0, z: 0, w: 1 },
+      scale: { x: 1, y: 1, z: 1 },
+    },
+    dimensions: { xMetres: 0.5, yMetres: 1.7, zMetres: 0.5 },
+    geometryReference: null,
+    visibility: "VISIBLE",
+    locked: false,
+    constraintLabels: [],
+    location: { kind: "POSITION" },
+    schedule: { startSecond: 0, endSecond: 3600 },
+    scenarioRole: "SYNTHETIC_OCCUPANT",
+    ...extra,
+  };
+}
+
 describe("canonical project schema", () => {
   it("parses the deterministic synthetic fixture without mutating it", () => {
     const input = structuredClone(minimalProject);
@@ -95,6 +136,141 @@ describe("canonical project schema", () => {
       Object.is(result.value.rooms[0]?.entities[0]?.transform.position.x, -0),
     ).toBe(false);
     expect(result.value.claims[0]?.quantity.unit).toBe("m");
+  });
+
+  it.each(["\u0000", "\u0085"])(
+    "rejects C0/C1 bounded text controls without leaking them",
+    (control) => {
+      const input = structuredClone(minimalProject);
+      const privateText = `  ${control}DO_NOT_LEAK_TEXT`;
+      setAtPath(input, ["name"], privateText);
+
+      const error = invalidResult(input);
+
+      expect(JSON.stringify(error)).not.toContain(privateText);
+      expect(error.message).not.toContain(privateText);
+    },
+  );
+
+  it("rejects whitespace-only bounded text and non-portable identifiers", () => {
+    const whitespace = structuredClone(minimalProject);
+    setAtPath(whitespace, ["rooms", 0, "label"], "\t \n");
+    expect(invalidResult(whitespace).code).toBe("INVALID_PROJECT");
+
+    const identifier = structuredClone(minimalProject);
+    setAtPath(identifier, ["projectId"], "not portable\u0000");
+    expect(invalidResult(identifier).code).toBe("INVALID_PROJECT");
+  });
+
+  it("preserves source-unit precision and calibration provenance", () => {
+    const input = structuredClone(minimalProject);
+    const result = parseProject(input);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("Expected synthetic fixture to parse");
+    }
+    expect(result.value.claims[0]?.quantity.source).toEqual({
+      value: 2.4,
+      unit: "m",
+      precision: 0.01,
+      calibrationEvidenceId: null,
+    });
+  });
+
+  it("uses Task 3 foot conversion provenance and verifies the canonical value", () => {
+    const input = structuredClone(minimalProject);
+    setAtPath(input, ["claims", 0, "quantity", "value"], 3.048);
+    setAtPath(input, ["claims", 0, "quantity", "source"], {
+      value: 10,
+      unit: "ft",
+      precision: 0.125,
+      calibrationEvidenceId: "evidence-synthetic-001",
+    });
+
+    const result = parseProject(input);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("Expected converted claim to parse");
+    }
+    expect(result.value.claims[0]?.quantity).toMatchObject({
+      kind: "LENGTH",
+      value: 3.048,
+      unit: "m",
+      source: {
+        value: 10,
+        unit: "ft",
+        precision: 0.125,
+        calibrationEvidenceId: "evidence-synthetic-001",
+      },
+    });
+  });
+
+  it("rejects a negative physical length with provenance failure", () => {
+    const input = structuredClone(minimalProject);
+    setAtPath(input, ["claims", 0, "quantity", "value"], -1);
+
+    const error = invalidResult(input);
+
+    expect(error.code).toBe("INVALID_QUANTITY_PROVENANCE");
+    expect(error.path).toEqual(["claims", 0, "quantity"]);
+  });
+
+  it("canonicalizes accepted negative zero values across scalar boundaries", () => {
+    const input = structuredClone(minimalProject);
+    setAtPath(input, ["claims", 0, "confidence"], -0);
+    setAtPath(input, ["claims", 0, "quantity", "value"], -0);
+    setAtPath(input, ["claims", 0, "quantity", "source"], {
+      value: -0,
+      unit: "m",
+      precision: -0,
+      calibrationEvidenceId: null,
+    });
+    setAtPath(input, ["claims", 1, "uncertainty", "lower"], -0);
+    setAtPath(input, ["claims", 3, "uncertainty", "value"], -0);
+    setAtPath(
+      input,
+      ["rooms", 0, "entities", 0],
+      occupantEntity({ schedule: { startSecond: -0, endSecond: 3600 } }),
+    );
+
+    const result = parseProject(input);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("Expected negative zero values to canonicalize");
+    }
+    expect(Object.is(result.value.claims[0]?.confidence, -0)).toBe(false);
+    const quantity = result.value.claims[0]?.quantity;
+    expect(quantity).toMatchObject({
+      value: 0,
+      source: { value: 0, precision: 0 },
+    });
+    if (quantity !== undefined) {
+      expect(Object.is(quantity.value, -0)).toBe(false);
+      expect(Object.is(quantity.source.value, -0)).toBe(false);
+      expect(Object.is(quantity.source.precision, -0)).toBe(false);
+    }
+    const uncertainty = result.value.claims[1]?.uncertainty;
+    expect(uncertainty).toMatchObject({ kind: "interval", lower: 0 });
+    if (uncertainty?.kind === "interval") {
+      expect(Object.is(uncertainty.lower, -0)).toBe(false);
+    }
+    const standardDeviation = result.value.claims[3]?.uncertainty;
+    expect(standardDeviation).toMatchObject({
+      kind: "standard-deviation",
+      value: 0,
+    });
+    if (standardDeviation?.kind === "standard-deviation") {
+      expect(Object.is(standardDeviation.value, -0)).toBe(false);
+    }
+    const entity = result.value.rooms[0]?.entities[0];
+    if (entity?.type === "OCCUPANT") {
+      expect(Object.is(entity.schedule.startSecond, -0)).toBe(false);
+    } else {
+      throw new Error("Expected occupant entity to parse");
+    }
   });
 
   it("rejects an unknown schema version with a stable code and path", () => {
@@ -162,6 +338,16 @@ describe("canonical project schema", () => {
     expect(error.path).toEqual(["claims", 7, "derivation"]);
   });
 
+  it("maps an omitted recommendation derivation to the required stable code", () => {
+    const input = structuredClone(minimalProject);
+    deleteAtPath(input, ["claims", 7, "derivation"]);
+
+    const error = invalidResult(input);
+
+    expect(error.code).toBe("MISSING_RECOMMENDATION_DERIVATION");
+    expect(error.path).toEqual(["claims", 7, "derivation"]);
+  });
+
   it("rejects a recommendation derivation on another evidence category", () => {
     const input = structuredClone(minimalProject);
     setAtPath(input, ["claims", 0, "derivation"], {
@@ -204,30 +390,46 @@ describe("canonical project schema", () => {
     "rejects an occupant %s attribute without exposing its value",
     (forbiddenKey) => {
       const input = structuredClone(minimalProject);
-      setAtPath(input, ["rooms", 0, "entities", 0], {
-        type: "OCCUPANT",
-        entityId: "entity-occupant-001",
-        label: "Occupant marker",
-        transform: {
-          position: { x: 1, y: 0, z: 1 },
-          rotation: { x: 0, y: 0, z: 0, w: 1 },
-          scale: { x: 1, y: 1, z: 1 },
-        },
-        dimensions: { xMetres: 0.5, yMetres: 1.7, zMetres: 0.5 },
-        geometryReference: null,
-        visibility: "VISIBLE",
-        locked: false,
-        constraintLabels: [],
-        location: { kind: "POSITION" },
-        schedule: { startSecond: 0, endSecond: 3600 },
-        scenarioRole: "SYNTHETIC_OCCUPANT",
-        [forbiddenKey]: "DO_NOT_LEAK_SENTINEL",
-      });
+      setAtPath(
+        input,
+        ["rooms", 0, "entities", 0],
+        occupantEntity({ [forbiddenKey]: "DO_NOT_LEAK_SENTINEL" }),
+      );
 
       const error = invalidResult(input);
 
       expect(error.code).toBe("FORBIDDEN_OCCUPANT_ATTRIBUTE");
       expect(error.path).toEqual(["rooms", 0, "entities", 0]);
+      expect(JSON.stringify(error)).not.toContain("DO_NOT_LEAK_SENTINEL");
+      expect(JSON.stringify(error)).not.toContain(forbiddenKey);
+    },
+  );
+
+  it.each(["GENERIC", "DEVICE"] as const)(
+    "keeps %s entity identity keys in the generic unknown-field boundary",
+    (type) => {
+      const input = structuredClone(minimalProject);
+      if (type === "DEVICE") {
+        setAtPath(input, ["rooms", 0, "entities", 0], {
+          ...structuredClone(minimalProject.rooms[0].entities[0]),
+          type,
+          deviceKind: "FAN",
+          operatingState: "OFF",
+          identity: "DO_NOT_LEAK_SENTINEL",
+        });
+      } else {
+        setAtPath(
+          input,
+          ["rooms", 0, "entities", 0, "identity"],
+          "DO_NOT_LEAK_SENTINEL",
+        );
+      }
+
+      const error = invalidResult(input);
+
+      expect(error.code).toBe("UNKNOWN_FIELD");
+      expect(error.path).toEqual(["rooms", 0, "entities", 0, "$unknown"]);
+      expect(JSON.stringify(error)).not.toContain("identity");
       expect(JSON.stringify(error)).not.toContain("DO_NOT_LEAK_SENTINEL");
     },
   );
@@ -257,15 +459,19 @@ describe("canonical project schema", () => {
   it.each([
     {
       mutate: (input: object) => {
-        setAtPath(input, ["extra"], "not-allowed");
+        setAtPath(input, ["private-looking-key"], "DO_NOT_LEAK_SENTINEL");
       },
-      path: ["extra"],
+      path: ["$unknown"],
     },
     {
       mutate: (input: object) => {
-        setAtPath(input, ["rooms", 0, "boundary", "extra"], "not-allowed");
+        setAtPath(
+          input,
+          ["rooms", 0, "boundary", "private-looking-key"],
+          "DO_NOT_LEAK_SENTINEL",
+        );
       },
-      path: ["rooms", 0, "boundary", "extra"],
+      path: ["rooms", 0, "boundary", "$unknown"],
     },
   ])("rejects unknown fields at $path", ({ mutate, path }) => {
     const input = structuredClone(minimalProject);
@@ -275,6 +481,8 @@ describe("canonical project schema", () => {
 
     expect(error.code).toBe("UNKNOWN_FIELD");
     expect(error.path).toEqual(path);
+    expect(JSON.stringify(error)).not.toContain("private-looking-key");
+    expect(JSON.stringify(error)).not.toContain("DO_NOT_LEAK_SENTINEL");
   });
 
   it("rejects raw evidence content and does not leak serialized input", () => {
@@ -284,6 +492,7 @@ describe("canonical project schema", () => {
     const error = invalidResult(input);
 
     expect(error.code).toBe("UNKNOWN_FIELD");
+    expect(error.path).toEqual(["evidence", 0, "$unknown"]);
     expect(JSON.stringify(error)).not.toContain("DO_NOT_LEAK_SENTINEL");
     expect(JSON.stringify(error)).not.toContain(
       '"content":"DO_NOT_LEAK_SENTINEL"',

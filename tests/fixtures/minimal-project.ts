@@ -50,7 +50,17 @@ export const minimalProject = {
     {
       claimId: "claim-observed-001",
       subject: { kind: "ROOM", roomId: "room-synthetic-001" },
-      quantity: { kind: "LENGTH", value: 2.4, unit: "m" },
+      quantity: {
+        kind: "LENGTH",
+        value: 2.4,
+        unit: "m",
+        source: {
+          value: 2.4,
+          unit: "m",
+          precision: 0.01,
+          calibrationEvidenceId: null,
+        },
+      },
       category: "OBSERVED",
       confidence: 0.4,
       uncertainty: { kind: "none" },
@@ -61,13 +71,22 @@ export const minimalProject = {
       derivation: {
         kind: "DIRECT",
         method: "synthetic-observation",
-        inputClaimIds: [],
       },
     },
     {
       claimId: "claim-measured-001",
       subject: { kind: "ROOM", roomId: "room-synthetic-001" },
-      quantity: { kind: "LENGTH", value: 2.4, unit: "m" },
+      quantity: {
+        kind: "LENGTH",
+        value: 2.4,
+        unit: "m",
+        source: {
+          value: 2.4,
+          unit: "m",
+          precision: 0.01,
+          calibrationEvidenceId: null,
+        },
+      },
       category: "MEASURED",
       confidence: 0.7,
       uncertainty: { kind: "interval", lower: 2.39, upper: 2.41 },
@@ -78,13 +97,22 @@ export const minimalProject = {
       derivation: {
         kind: "DIRECT",
         method: "synthetic-measurement",
-        inputClaimIds: [],
       },
     },
     {
       claimId: "claim-user-entered-001",
       subject: { kind: "ROOM", roomId: "room-synthetic-001" },
-      quantity: { kind: "LENGTH", value: 2.4, unit: "m" },
+      quantity: {
+        kind: "LENGTH",
+        value: 2.4,
+        unit: "m",
+        source: {
+          value: 2.4,
+          unit: "m",
+          precision: 0.01,
+          calibrationEvidenceId: null,
+        },
+      },
       category: "USER_ENTERED",
       confidence: 0.5,
       uncertainty: { kind: "none" },
@@ -95,13 +123,22 @@ export const minimalProject = {
       derivation: {
         kind: "DIRECT",
         method: "manual-entry",
-        inputClaimIds: [],
       },
     },
     {
       claimId: "claim-inferred-001",
       subject: { kind: "ROOM", roomId: "room-synthetic-001" },
-      quantity: { kind: "LENGTH", value: 2.4, unit: "m" },
+      quantity: {
+        kind: "LENGTH",
+        value: 2.4,
+        unit: "m",
+        source: {
+          value: 2.4,
+          unit: "m",
+          precision: 0.01,
+          calibrationEvidenceId: null,
+        },
+      },
       category: "INFERRED",
       confidence: 0.3,
       uncertainty: { kind: "standard-deviation", value: 0.2 },
@@ -112,13 +149,22 @@ export const minimalProject = {
       derivation: {
         kind: "DIRECT",
         method: "synthetic-inference",
-        inputClaimIds: [],
       },
     },
     {
       claimId: "claim-simulated-001",
       subject: { kind: "ROOM", roomId: "room-synthetic-001" },
-      quantity: { kind: "LENGTH", value: 2.4, unit: "m" },
+      quantity: {
+        kind: "LENGTH",
+        value: 2.4,
+        unit: "m",
+        source: {
+          value: 2.4,
+          unit: "m",
+          precision: 0.01,
+          calibrationEvidenceId: null,
+        },
+      },
       category: "SIMULATED",
       confidence: 0.4,
       uncertainty: { kind: "none" },
@@ -129,13 +175,22 @@ export const minimalProject = {
       derivation: {
         kind: "DIRECT",
         method: "synthetic-zone-model",
-        inputClaimIds: [],
       },
     },
     {
       claimId: "claim-assumed-001",
       subject: { kind: "ROOM", roomId: "room-synthetic-001" },
-      quantity: { kind: "LENGTH", value: 2.4, unit: "m" },
+      quantity: {
+        kind: "LENGTH",
+        value: 2.4,
+        unit: "m",
+        source: {
+          value: 2.4,
+          unit: "m",
+          precision: 0.01,
+          calibrationEvidenceId: null,
+        },
+      },
       category: "ASSUMED",
       confidence: 0.2,
       uncertainty: { kind: "none" },
@@ -146,13 +201,22 @@ export const minimalProject = {
       derivation: {
         kind: "DIRECT",
         method: "synthetic-assumption",
-        inputClaimIds: [],
       },
     },
     {
       claimId: "claim-predicted-001",
       subject: { kind: "ROOM", roomId: "room-synthetic-001" },
-      quantity: { kind: "LENGTH", value: 2.4, unit: "m" },
+      quantity: {
+        kind: "LENGTH",
+        value: 2.4,
+        unit: "m",
+        source: {
+          value: 2.4,
+          unit: "m",
+          precision: 0.01,
+          calibrationEvidenceId: null,
+        },
+      },
       category: "PREDICTED",
       confidence: 0.4,
       uncertainty: { kind: "none" },
@@ -163,13 +227,22 @@ export const minimalProject = {
       derivation: {
         kind: "DIRECT",
         method: "synthetic-prediction",
-        inputClaimIds: [],
       },
     },
     {
       claimId: "claim-recommended-001",
       subject: { kind: "ROOM", roomId: "room-synthetic-001" },
-      quantity: { kind: "LENGTH", value: 2.4, unit: "m" },
+      quantity: {
+        kind: "LENGTH",
+        value: 2.4,
+        unit: "m",
+        source: {
+          value: 2.4,
+          unit: "m",
+          precision: 0.01,
+          calibrationEvidenceId: null,
+        },
+      },
       category: "RECOMMENDED",
       confidence: 0.6,
       uncertainty: { kind: "none" },
