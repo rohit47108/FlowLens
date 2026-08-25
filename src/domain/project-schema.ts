@@ -39,6 +39,85 @@ const FORBIDDEN_OCCUPANT_KEYS = new Set([
   "patient",
 ]);
 
+const intrinsicArray = Array;
+const intrinsicObject = Object;
+const intrinsicArrayIsArray = intrinsicArray.isArray;
+const intrinsicArrayPrototype = intrinsicArray.prototype;
+const intrinsicCreate = intrinsicObject.create;
+const intrinsicDefineProperty = intrinsicObject.defineProperty;
+const intrinsicGetOwnPropertyDescriptor =
+  intrinsicObject.getOwnPropertyDescriptor;
+const intrinsicGetPrototypeOf = intrinsicObject.getPrototypeOf;
+const intrinsicHasOwn = intrinsicObject.hasOwn;
+const intrinsicIs = intrinsicObject.is;
+const intrinsicObjectPrototype = intrinsicObject.prototype;
+const intrinsicOwnKeys = Reflect.ownKeys;
+
+type PrototypeDescriptorSnapshot = {
+  key: PropertyKey;
+  kind: "DATA" | "ACCESSOR";
+  configurable: boolean;
+  enumerable: boolean;
+  writable?: boolean;
+  value?: unknown;
+  get?: (() => unknown) | undefined;
+  set?: ((value: unknown) => void) | undefined;
+};
+
+type PrototypeBaseline = {
+  count: number;
+  entries: Record<number, PrototypeDescriptorSnapshot>;
+};
+
+function isCanonicalNumericPrototypeKey(key: PropertyKey): boolean {
+  if (typeof key !== "string") {
+    return false;
+  }
+  return key === "-0" || String(Number(key)) === key;
+}
+
+function capturePrototypeBaseline(prototype: object): PrototypeBaseline {
+  const keys = intrinsicOwnKeys(prototype);
+  const entries = intrinsicCreate(null) as Record<
+    number,
+    PrototypeDescriptorSnapshot
+  >;
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index]!;
+    const descriptor = intrinsicGetOwnPropertyDescriptor(prototype, key)!;
+    const entry = intrinsicCreate(null) as PrototypeDescriptorSnapshot;
+    entry.key = key;
+    entry.configurable = descriptor.configurable === true;
+    entry.enumerable = descriptor.enumerable === true;
+    if (intrinsicHasOwn(descriptor, "value")) {
+      entry.kind = "DATA";
+      entry.writable = descriptor.writable === true;
+      entry.value = descriptor.value;
+    } else {
+      entry.kind = "ACCESSOR";
+      entry.get = descriptor.get;
+      entry.set = descriptor.set;
+    }
+    entries[index] = entry;
+  }
+
+  const baseline = intrinsicCreate(null) as PrototypeBaseline;
+  baseline.count = keys.length;
+  baseline.entries = entries;
+  return baseline;
+}
+
+// This guard assumes the realm constructors and intrinsics are trustworthy when
+// this module evaluates. It detects later Object/Array constructor rebinding and
+// prototype descriptor changes, but not pre-initialization compromise or
+// arbitrary changes to uncaptured realm intrinsics.
+const objectPrototypeBaseline = capturePrototypeBaseline(
+  intrinsicObjectPrototype,
+);
+const arrayPrototypeBaseline = capturePrototypeBaseline(
+  intrinsicArrayPrototype,
+);
+
 const rawFiniteSafeNumber = z
   .number()
   .finite()
@@ -664,9 +743,9 @@ function isDataDescriptor(
 ): descriptor is PropertyDescriptor & { readonly value: unknown } {
   return (
     descriptor !== undefined &&
-    Object.hasOwn(descriptor, "value") &&
-    !Object.hasOwn(descriptor, "get") &&
-    !Object.hasOwn(descriptor, "set")
+    intrinsicHasOwn(descriptor, "value") &&
+    !intrinsicHasOwn(descriptor, "get") &&
+    !intrinsicHasOwn(descriptor, "set")
   );
 }
 
@@ -685,7 +764,7 @@ function defineSanitizedDataProperty(
   key: PropertyKey,
   value: SanitizedValue,
 ): void {
-  const descriptor = Object.create(null) as {
+  const descriptor = intrinsicCreate(null) as {
     value: SanitizedValue;
     enumerable: boolean;
     configurable: boolean;
@@ -695,7 +774,7 @@ function defineSanitizedDataProperty(
   descriptor.enumerable = true;
   descriptor.configurable = true;
   descriptor.writable = true;
-  Object.defineProperty(target, key, descriptor);
+  intrinsicDefineProperty(target, key, descriptor);
 }
 
 function sanitizeArray(
@@ -703,11 +782,11 @@ function sanitizeArray(
   context: SanitizationContext,
   depth: number,
 ): SanitizationResult {
-  if (Object.getPrototypeOf(input) !== Array.prototype) {
+  if (intrinsicGetPrototypeOf(input) !== intrinsicArrayPrototype) {
     return rejectedSanitization;
   }
 
-  const lengthDescriptor = Object.getOwnPropertyDescriptor(input, "length");
+  const lengthDescriptor = intrinsicGetOwnPropertyDescriptor(input, "length");
   if (
     !isDataDescriptor(lengthDescriptor) ||
     lengthDescriptor.enumerable ||
@@ -720,7 +799,7 @@ function sanitizeArray(
   }
 
   const length = lengthDescriptor.value;
-  const keys = Reflect.ownKeys(input);
+  const keys = intrinsicOwnKeys(input);
   if (keys.length !== length + 1) {
     return rejectedSanitization;
   }
@@ -728,7 +807,7 @@ function sanitizeArray(
   const output: SanitizedArray = [];
   for (let index = 0; index < length; index += 1) {
     const key = String(index);
-    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    const descriptor = intrinsicGetOwnPropertyDescriptor(input, key);
     if (
       !isDataDescriptor(descriptor) ||
       !descriptor.enumerable ||
@@ -750,17 +829,17 @@ function sanitizeRecord(
   context: SanitizationContext,
   depth: number,
 ): SanitizationResult {
-  const prototype = Object.getPrototypeOf(input);
-  if (prototype !== Object.prototype && prototype !== null) {
+  const prototype = intrinsicGetPrototypeOf(input);
+  if (prototype !== intrinsicObjectPrototype && prototype !== null) {
     return rejectedSanitization;
   }
 
-  const keys = Reflect.ownKeys(input);
+  const keys = intrinsicOwnKeys(input);
   if (keys.length > MAX_RECORD_KEYS) {
     return rejectedSanitization;
   }
 
-  const output: SanitizedRecord = Object.create(null);
+  const output: SanitizedRecord = intrinsicCreate(null);
   for (const key of keys) {
     if (
       typeof key !== "string" ||
@@ -769,7 +848,7 @@ function sanitizeRecord(
     ) {
       return rejectedSanitization;
     }
-    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    const descriptor = intrinsicGetOwnPropertyDescriptor(input, key);
     if (!isDataDescriptor(descriptor) || !descriptor.enumerable) {
       return rejectedSanitization;
     }
@@ -805,7 +884,7 @@ function sanitizeInput(
 
   context.ancestors.add(input);
   try {
-    return Array.isArray(input)
+    return intrinsicArrayIsArray(input)
       ? sanitizeArray(input, context, depth)
       : sanitizeRecord(input, context, depth);
   } finally {
@@ -813,15 +892,63 @@ function sanitizeInput(
   }
 }
 
-function hasUnsafeAmbientPrototypeState(): boolean {
-  for (const key of ["get", "set"] as const) {
-    const descriptor = Object.getOwnPropertyDescriptor(Object.prototype, key);
-    if (descriptor !== undefined && !isDataDescriptor(descriptor)) {
-      return true;
+function prototypeMatchesBaseline(
+  prototype: object,
+  baseline: PrototypeBaseline,
+): boolean {
+  const keys = intrinsicOwnKeys(prototype);
+  if (keys.length !== baseline.count) {
+    return false;
+  }
+
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index]!;
+    if (isCanonicalNumericPrototypeKey(key)) {
+      return false;
+    }
+    const expected = baseline.entries[index]!;
+    const descriptor = intrinsicGetOwnPropertyDescriptor(prototype, key);
+    if (
+      key !== expected.key ||
+      descriptor === undefined ||
+      descriptor.configurable !== expected.configurable ||
+      descriptor.enumerable !== expected.enumerable
+    ) {
+      return false;
+    }
+
+    const dataDescriptor = intrinsicHasOwn(descriptor, "value");
+    if (dataDescriptor !== (expected.kind === "DATA")) {
+      return false;
+    }
+    if (dataDescriptor) {
+      if (
+        descriptor.writable !== expected.writable ||
+        !intrinsicIs(descriptor.value, expected.value)
+      ) {
+        return false;
+      }
+    } else if (
+      descriptor.get !== expected.get ||
+      descriptor.set !== expected.set
+    ) {
+      return false;
     }
   }
 
-  return Object.getOwnPropertyDescriptor(Array.prototype, "0") !== undefined;
+  return true;
+}
+
+function hasUnsafeAmbientPrototypeState(): boolean {
+  return (
+    Object !== intrinsicObject ||
+    Array !== intrinsicArray ||
+    !prototypeMatchesBaseline(
+      intrinsicObjectPrototype,
+      objectPrototypeBaseline,
+    ) ||
+    !prototypeMatchesBaseline(intrinsicArrayPrototype, arrayPrototypeBaseline)
+  );
 }
 
 function normalizedPath(issue: ZodIssue): readonly (string | number)[] {
@@ -933,10 +1060,14 @@ function boundaryError(
   return new BoundaryValidationError("INVALID_PROJECT", path);
 }
 
+const invalidProjectRootError = Object.freeze(
+  new BoundaryValidationError("INVALID_PROJECT", []),
+);
+
 function invalidProjectResult(): ParseResult<Project> {
   return {
     ok: false,
-    error: new BoundaryValidationError("INVALID_PROJECT", []),
+    error: invalidProjectRootError,
   };
 }
 
@@ -945,6 +1076,9 @@ function parseSanitizedProject(
   requireOriginalCloneability: boolean,
 ): ParseResult<Project> {
   try {
+    if (hasUnsafeAmbientPrototypeState()) {
+      return invalidProjectResult();
+    }
     const sanitizedInput = sanitizeInput(
       input,
       { ancestors: new Set(), nodes: 0 },
@@ -953,11 +1087,11 @@ function parseSanitizedProject(
     if (!sanitizedInput.ok) {
       return invalidProjectResult();
     }
-    if (hasUnsafeAmbientPrototypeState()) {
-      return invalidProjectResult();
-    }
     if (requireOriginalCloneability) {
       structuredClone(input);
+    }
+    if (hasUnsafeAmbientPrototypeState()) {
+      return invalidProjectResult();
     }
     const result = ProjectSchema.safeParse(sanitizedInput.value);
     if (result.success) {

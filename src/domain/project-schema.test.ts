@@ -119,6 +119,23 @@ function restoreDescriptor(
   Object.defineProperty(target, key, descriptor);
 }
 
+function expectPrototypeGuardRejection(
+  result: ReturnType<typeof parseProject> | undefined,
+  privateValue: string,
+): void {
+  expect(result?.ok).toBe(false);
+  if (result?.ok === false) {
+    expect(result.error.code).toBe("INVALID_PROJECT");
+    expect(result.error.path).toEqual([]);
+    expect(JSON.stringify(result.error)).not.toContain(privateValue);
+  }
+}
+
+function expectOrdinaryProjectsToParseAfterRestoration(): void {
+  expect(parseProject(structuredClone(minimalProject)).ok).toBe(true);
+  expect(parseProjectJson(JSON.stringify(minimalProject)).ok).toBe(true);
+}
+
 describe("canonical project schema", () => {
   it("parses a serialized synthetic project through the hostile JSON ingress", () => {
     const result = parseProjectJson(JSON.stringify(minimalProject));
@@ -219,6 +236,179 @@ describe("canonical project schema", () => {
     expect(accessorReads).toBe(0);
   });
 
+  it("rejects a project-field setter on Object.prototype before either parser invokes it", () => {
+    const trustedInput = structuredClone(minimalProject);
+    const jsonInput = JSON.stringify(minimalProject);
+    const privateValue = minimalProject.name;
+    const original = Object.getOwnPropertyDescriptor(Object.prototype, "name");
+    let setterWrites = 0;
+    let trustedResult: ReturnType<typeof parseProject> | undefined;
+    let jsonResult: ReturnType<typeof parseProjectJson> | undefined;
+
+    try {
+      const descriptor = Object.create(null) as PropertyDescriptor;
+      descriptor.configurable = true;
+      descriptor.set = function setter() {
+        setterWrites += 1;
+      };
+      Object.defineProperty(Object.prototype, "name", descriptor);
+
+      setterWrites = 0;
+      trustedResult = parseProject(trustedInput);
+      jsonResult = parseProjectJson(jsonInput);
+    } finally {
+      restoreDescriptor(Object.prototype, "name", original);
+    }
+
+    expectPrototypeGuardRejection(trustedResult, privateValue);
+    expectPrototypeGuardRejection(jsonResult, privateValue);
+    expect(setterWrites).toBe(0);
+    expectOrdinaryProjectsToParseAfterRestoration();
+  });
+
+  it("rejects an Array.prototype numeric setter beyond index zero before either parser invokes it", () => {
+    const trustedInput = structuredClone(minimalProject);
+    const jsonInput = JSON.stringify(minimalProject);
+    const privateValue = minimalProject.name;
+    const original = Object.getOwnPropertyDescriptor(Array.prototype, "1");
+    const originalLength = Object.getOwnPropertyDescriptor(
+      Array.prototype,
+      "length",
+    );
+    let setterWrites = 0;
+    let trustedResult: ReturnType<typeof parseProject> | undefined;
+    let jsonResult: ReturnType<typeof parseProjectJson> | undefined;
+
+    try {
+      const descriptor = Object.create(null) as PropertyDescriptor;
+      descriptor.configurable = true;
+      descriptor.set = function setter(value: unknown) {
+        setterWrites += 1;
+        const ownDescriptor = Object.create(null) as PropertyDescriptor;
+        ownDescriptor.configurable = true;
+        ownDescriptor.enumerable = true;
+        ownDescriptor.writable = true;
+        ownDescriptor.value = value;
+        Object.defineProperty(this, "1", ownDescriptor);
+      };
+      Object.defineProperty(Array.prototype, "1", descriptor);
+
+      setterWrites = 0;
+      trustedResult = parseProject(trustedInput);
+      jsonResult = parseProjectJson(jsonInput);
+    } finally {
+      restoreDescriptor(Array.prototype, "1", original);
+      restoreDescriptor(Array.prototype, "length", originalLength);
+    }
+
+    expectPrototypeGuardRejection(trustedResult, privateValue);
+    expectPrototypeGuardRejection(jsonResult, privateValue);
+    expect(setterWrites).toBe(0);
+    expectOrdinaryProjectsToParseAfterRestoration();
+  });
+
+  it("rejects replacement of a symbol-keyed Array prototype traversal function", () => {
+    const trustedInput = structuredClone(minimalProject);
+    const jsonInput = JSON.stringify(minimalProject);
+    const privateValue = minimalProject.name;
+    const original = Object.getOwnPropertyDescriptor(
+      Array.prototype,
+      Symbol.iterator,
+    );
+    if (original === undefined || typeof original.value !== "function") {
+      throw new Error("Expected the supported realm to have an array iterator");
+    }
+    const originalIterator = original.value as (
+      this: unknown,
+    ) => IterableIterator<unknown>;
+    let replacementCalls = 0;
+    let trustedResult: ReturnType<typeof parseProject> | undefined;
+    let jsonResult: ReturnType<typeof parseProjectJson> | undefined;
+
+    try {
+      const descriptor = Object.create(null) as PropertyDescriptor;
+      descriptor.configurable = original.configurable === true;
+      descriptor.enumerable = original.enumerable === true;
+      descriptor.writable = original.writable === true;
+      descriptor.value = function replacementIterator(this: unknown) {
+        replacementCalls += 1;
+        return Reflect.apply(originalIterator, this, []);
+      };
+      Object.defineProperty(Array.prototype, Symbol.iterator, descriptor);
+
+      replacementCalls = 0;
+      trustedResult = parseProject(trustedInput);
+      jsonResult = parseProjectJson(jsonInput);
+    } finally {
+      restoreDescriptor(Array.prototype, Symbol.iterator, original);
+    }
+
+    expectPrototypeGuardRejection(trustedResult, privateValue);
+    expectPrototypeGuardRejection(jsonResult, privateValue);
+    expect(replacementCalls).toBe(0);
+    expectOrdinaryProjectsToParseAfterRestoration();
+  });
+
+  it("rejects a canonical numeric property added to Object.prototype", () => {
+    const trustedInput = structuredClone(minimalProject);
+    const jsonInput = JSON.stringify(minimalProject);
+    const privateValue = minimalProject.name;
+    const original = Object.getOwnPropertyDescriptor(Object.prototype, "4096");
+    let trustedResult: ReturnType<typeof parseProject> | undefined;
+    let jsonResult: ReturnType<typeof parseProjectJson> | undefined;
+
+    try {
+      const descriptor = Object.create(null) as PropertyDescriptor;
+      descriptor.configurable = true;
+      descriptor.enumerable = false;
+      descriptor.writable = true;
+      descriptor.value = "DO_NOT_LEAK_NUMERIC_PROTOTYPE";
+      Object.defineProperty(Object.prototype, "4096", descriptor);
+
+      trustedResult = parseProject(trustedInput);
+      jsonResult = parseProjectJson(jsonInput);
+    } finally {
+      restoreDescriptor(Object.prototype, "4096", original);
+    }
+
+    expectPrototypeGuardRejection(trustedResult, privateValue);
+    expectPrototypeGuardRejection(jsonResult, privateValue);
+    expectOrdinaryProjectsToParseAfterRestoration();
+  });
+
+  it("rejects a prototype descriptor attribute change even when its value is unchanged", () => {
+    const trustedInput = structuredClone(minimalProject);
+    const jsonInput = JSON.stringify(minimalProject);
+    const privateValue = minimalProject.name;
+    const original = Object.getOwnPropertyDescriptor(
+      Object.prototype,
+      "toString",
+    );
+    if (original === undefined || original.writable !== true) {
+      throw new Error("Expected the supported realm to have writable toString");
+    }
+    let trustedResult: ReturnType<typeof parseProject> | undefined;
+    let jsonResult: ReturnType<typeof parseProjectJson> | undefined;
+
+    try {
+      const descriptor = Object.create(null) as PropertyDescriptor;
+      descriptor.configurable = original.configurable === true;
+      descriptor.enumerable = original.enumerable === true;
+      descriptor.writable = false;
+      descriptor.value = original.value;
+      Object.defineProperty(Object.prototype, "toString", descriptor);
+
+      trustedResult = parseProject(trustedInput);
+      jsonResult = parseProjectJson(jsonInput);
+    } finally {
+      restoreDescriptor(Object.prototype, "toString", original);
+    }
+
+    expectPrototypeGuardRejection(trustedResult, privateValue);
+    expectPrototypeGuardRejection(jsonResult, privateValue);
+    expectOrdinaryProjectsToParseAfterRestoration();
+  });
+
   it("rejects serialized reserved keys and escaped text controls safely", () => {
     const reservedJson = `{"__proto__":"DO_NOT_LEAK_JSON_RESERVED",${JSON.stringify(
       minimalProject,
@@ -304,6 +494,10 @@ describe("canonical project schema", () => {
       "set",
     );
     const originalIndex = Object.getOwnPropertyDescriptor(Array.prototype, "0");
+    const originalArrayLength = Object.getOwnPropertyDescriptor(
+      Array.prototype,
+      "length",
+    );
     let descriptorAccessorReads = 0;
     let arraySetterWrites = 0;
     let result;
@@ -359,6 +553,7 @@ describe("canonical project schema", () => {
       restoreDescriptor(Object.prototype, "get", originalGet);
       restoreDescriptor(Object.prototype, "set", originalSet);
       restoreDescriptor(Array.prototype, "0", originalIndex);
+      restoreDescriptor(Array.prototype, "length", originalArrayLength);
     }
 
     expect(result?.ok).toBe(false);
