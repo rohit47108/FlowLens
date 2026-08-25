@@ -1,0 +1,22 @@
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+.vite/
+.cache/
+.worktrees/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.log
+.DS_Store
+Thumbs.db
+
+# FlowLens keeps private room evidence out of version control.
+local-data/
+private-fixtures/
+artifacts/private/
