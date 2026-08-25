@@ -17,10 +17,10 @@ This ledger maps the requested skills to the phase where their instructions gove
 | incremental-implementation | 1-15 | Activated for Phase 1 | Execute one tested vertical slice and checkpoint at a time. |
 | test-driven-development | 1-15 | Activated for Phase 1 | Red-green-refactor for behavior, property/integration/E2E tests by risk. |
 | security-and-hardening | 1, 5, 6, 13, 15 | Activated for architecture and Phase 1 | Trust boundaries, staged storage, hostile files, CSP, privacy, dependency and secret audit. |
-| frontend-design | 2, 3, 12, 15 | Scheduled | Restrained spatial-instrument design language and coherent workspace composition. |
-| ui-ux-pro-max | 2, 12, 15 | Scheduled | Evidence-backed interaction patterns, responsive states, and design-system decisions. |
-| frontend-ui-engineering | 2-5, 8-12 | Scheduled | Production React implementation of accessible responsive workflows. |
-| accessibility | 2, 3, 12, 15 | Scheduled | WCAG 2.2 AA, keyboard/semantic parity, automated plus manual checks. |
+| frontend-design | 2, 3, 12, 15 | Activated for Phase 2 | The accepted subject-specific direction, datum-spine signature, local typography, critique, and restraint rules are documented. |
+| ui-ux-pro-max | 2, 12, 15 | Activated for Phase 2 | Two database searches were audited; mismatched marketing/soft-UI output was rejected while accessibility, density, React, and Three.js guidance informed the project master. |
+| frontend-ui-engineering | 2-5, 8-12 | Activated for Phase 2 | Component, responsive, semantic, state, and anti-template quality rules bind the shell implementation. |
+| accessibility | 2, 3, 12, 15 | Activated for Phase 2 | WCAG 2.2 AA shell requirements, skip-link pattern, landmark structure, focus, reflow, forced-color, reduced-motion, and target rules are binding. |
 | vercel-react-best-practices | 1-15 because React was selected | Activated for Phase 1 | Direct imports, lazy heavy modules, derived state, stable component identity, and one-time initialization; no deployment implication. |
 | 3d-web-experience | 0 architecture and Phase 3 implementation | Activated for architecture | R3F/Three selection, semantic geometry, adaptive quality, WebGL fallback. |
 | computer-vision-opencv | 0 architecture and Phase 6 implementation | Activated for architecture | Staged OpenCV.js capability, apparent-motion boundary, fixtures, memory cleanup. |
@@ -34,7 +34,7 @@ This ledger maps the requested skills to the phase where their instructions gove
 | shipping-and-launch | 15 | Scheduled | Release readiness, honest limitations, version/changelog and rollback posture. |
 | ci-cd-and-automation | 1 foundation, primary in 13-15 | Scheduled | Reproducible GitHub checks, artifacts, security and performance gates. |
 | code-simplification | After each behavior is correct; final pass in 15 | Conditional | Simplify only after green correctness evidence, without changing contracts. |
-| debugging-and-error-recovery | Whenever a failure appears | Conditional | Activate on the first test/build/browser failure and retain exact evidence. |
+| debugging-and-error-recovery | Whenever a failure appears | Activated | The WSL `bash` mismatch and Vitest false-green discovery gap were reproduced, localized, corrected at the root, and re-verified before work resumed. |
 | prototype | Only if competing UI directions require comparison | Not triggered | The master brief already fixes one coherent workspace direction; no competing prototype is currently needed. |
 | computer-use:computer-use | Only for native/OS interaction | Not triggered | Browser and terminal workflows are sufficient so far. |
 | deploy-to-vercel | Only after explicit deployment authorization | Not authorized | Production build and host readiness may be proven locally; no external deployment occurs. |
