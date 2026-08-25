@@ -27,6 +27,8 @@ const MAX_INPUT_DEPTH = 32;
 const MAX_RECORD_KEYS = 64;
 const MAX_INPUT_KEY_LENGTH = 128;
 const MAX_SANITIZED_NODES = 65_536;
+const MAX_PROJECT_JSON_CODE_UNITS = 1_000_000;
+const MAX_PROJECT_JSON_UTF8_BYTES = 1_000_000;
 const RESERVED_META_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const FORBIDDEN_OCCUPANT_KEYS = new Set([
   "identity",
@@ -931,12 +933,17 @@ function boundaryError(
   return new BoundaryValidationError("INVALID_PROJECT", path);
 }
 
-/**
- * Hostile trust-boundary entrypoint. Public schemas remain composable, while
- * this function accepts only bounded sanitized own-data JSON-shaped project
- * graphs, then uses native structuredClone as an exotic/proxy cloneability gate.
- */
-export function parseProject(input: unknown): ParseResult<Project> {
+function invalidProjectResult(): ParseResult<Project> {
+  return {
+    ok: false,
+    error: new BoundaryValidationError("INVALID_PROJECT", []),
+  };
+}
+
+function parseSanitizedProject(
+  input: unknown,
+  requireOriginalCloneability: boolean,
+): ParseResult<Project> {
   try {
     const sanitizedInput = sanitizeInput(
       input,
@@ -944,18 +951,14 @@ export function parseProject(input: unknown): ParseResult<Project> {
       0,
     );
     if (!sanitizedInput.ok) {
-      return {
-        ok: false,
-        error: new BoundaryValidationError("INVALID_PROJECT", []),
-      };
+      return invalidProjectResult();
     }
     if (hasUnsafeAmbientPrototypeState()) {
-      return {
-        ok: false,
-        error: new BoundaryValidationError("INVALID_PROJECT", []),
-      };
+      return invalidProjectResult();
     }
-    structuredClone(input);
+    if (requireOriginalCloneability) {
+      structuredClone(input);
+    }
     const result = ProjectSchema.safeParse(sanitizedInput.value);
     if (result.success) {
       return { ok: true, value: result.data };
@@ -965,9 +968,40 @@ export function parseProject(input: unknown): ParseResult<Project> {
       error: boundaryError(sanitizedInput.value, result.error.issues[0]!),
     };
   } catch {
-    return {
-      ok: false,
-      error: new BoundaryValidationError("INVALID_PROJECT", []),
-    };
+    return invalidProjectResult();
+  }
+}
+
+/**
+ * Parses caller-trusted, already-decoded inert project values. Arbitrary live
+ * JavaScript objects, proxies, accessors, and exotics are unsupported here;
+ * reflective traps may run while they are rejected. Use parseProjectJson for
+ * direct untrusted serialized input.
+ */
+export function parseProject(input: unknown): ParseResult<Project> {
+  return parseSanitizedProject(input, true);
+}
+
+/**
+ * Hostile/import JSON ingress. It accepts only bounded primitive text before
+ * JSON.parse produces an inert value for the shared project boundary.
+ */
+export function parseProjectJson(input: unknown): ParseResult<Project> {
+  if (typeof input !== "string") {
+    return invalidProjectResult();
+  }
+  if (input.length > MAX_PROJECT_JSON_CODE_UNITS) {
+    return invalidProjectResult();
+  }
+
+  try {
+    if (
+      new TextEncoder().encode(input).byteLength > MAX_PROJECT_JSON_UTF8_BYTES
+    ) {
+      return invalidProjectResult();
+    }
+    return parseSanitizedProject(JSON.parse(input), false);
+  } catch {
+    return invalidProjectResult();
   }
 }

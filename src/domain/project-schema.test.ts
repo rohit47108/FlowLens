@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { WORLD_FRAME_VERSION } from "./spatial";
-import { parseProject } from "./project-schema";
+import { parseProject, parseProjectJson } from "./project-schema";
 import { minimalProject } from "../../tests/fixtures/minimal-project";
 
 function invalidResult(input: unknown) {
@@ -8,6 +8,15 @@ function invalidResult(input: unknown) {
   expect(result.ok).toBe(false);
   if (result.ok) {
     throw new Error("Expected invalid project input");
+  }
+  return result.error;
+}
+
+function invalidJsonResult(input: unknown) {
+  const result = parseProjectJson(input);
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    throw new Error("Expected invalid JSON project input");
   }
   return result.error;
 }
@@ -111,6 +120,143 @@ function restoreDescriptor(
 }
 
 describe("canonical project schema", () => {
+  it("parses a serialized synthetic project through the hostile JSON ingress", () => {
+    const result = parseProjectJson(JSON.stringify(minimalProject));
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual(minimalProject);
+    }
+  });
+
+  it.each([
+    '{"name":"DO_NOT_LEAK_MALFORMED"',
+    `DO_NOT_LEAK_CODE_UNITS${"a".repeat(1_000_000)}`,
+    `DO_NOT_LEAK_UTF8${"€".repeat(400_000)}`,
+  ])("rejects hostile JSON text without source or parser leaks", (input) => {
+    const error = invalidJsonResult(input);
+
+    expect(error.code).toBe("INVALID_PROJECT");
+    expect(error.path).toEqual([]);
+    expect(JSON.stringify(error)).not.toContain("DO_NOT_LEAK");
+    expect(error.message).not.toContain("DO_NOT_LEAK");
+  });
+
+  it("rejects non-string JSON ingress without inspecting a proxy", () => {
+    const counters = {
+      get: 0,
+      getPrototypeOf: 0,
+      ownKeys: 0,
+      getOwnPropertyDescriptor: 0,
+    };
+    const input = new Proxy(
+      { value: "DO_NOT_LEAK_PROXY_JSON" },
+      {
+        get(target, property, receiver) {
+          counters.get += 1;
+          return Reflect.get(target, property, receiver);
+        },
+        getPrototypeOf(target) {
+          counters.getPrototypeOf += 1;
+          return Reflect.getPrototypeOf(target);
+        },
+        ownKeys(target) {
+          counters.ownKeys += 1;
+          return Reflect.ownKeys(target);
+        },
+        getOwnPropertyDescriptor(target, property) {
+          counters.getOwnPropertyDescriptor += 1;
+          return Reflect.getOwnPropertyDescriptor(target, property);
+        },
+      },
+    );
+
+    const error = invalidJsonResult(input);
+
+    expect(error.code).toBe("INVALID_PROJECT");
+    expect(error.path).toEqual([]);
+    expect(JSON.stringify(error)).not.toContain("DO_NOT_LEAK_PROXY_JSON");
+    expect(counters).toEqual({
+      get: 0,
+      getPrototypeOf: 0,
+      ownKeys: 0,
+      getOwnPropertyDescriptor: 0,
+    });
+  });
+
+  it("fails JSON ingress closed under ambient descriptor pollution", () => {
+    const json = JSON.stringify(minimalProject);
+    const originalGet = Object.getOwnPropertyDescriptor(
+      Object.prototype,
+      "get",
+    );
+    let accessorReads = 0;
+    let result;
+
+    try {
+      Object.defineProperty(
+        Object.prototype,
+        "get",
+        Object.assign(Object.create(null), {
+          configurable: true,
+          get() {
+            accessorReads += 1;
+            return undefined;
+          },
+        }),
+      );
+      accessorReads = 0;
+      result = parseProjectJson(json);
+    } finally {
+      restoreDescriptor(Object.prototype, "get", originalGet);
+    }
+
+    expect(result?.ok).toBe(false);
+    if (result?.ok === false) {
+      expect(result.error.code).toBe("INVALID_PROJECT");
+      expect(result.error.path).toEqual([]);
+    }
+    expect(accessorReads).toBe(0);
+  });
+
+  it("rejects serialized reserved keys and escaped text controls safely", () => {
+    const reservedJson = `{"__proto__":"DO_NOT_LEAK_JSON_RESERVED",${JSON.stringify(
+      minimalProject,
+    ).slice(1)}`;
+    const reservedError = invalidJsonResult(reservedJson);
+    expect(reservedError.code).toBe("INVALID_PROJECT");
+    expect(reservedError.path).toEqual([]);
+    expect(JSON.stringify(reservedError)).not.toContain(
+      "DO_NOT_LEAK_JSON_RESERVED",
+    );
+
+    const controlProject = structuredClone(minimalProject);
+    setAtPath(controlProject, ["name"], "DO_NOT_LEAK_ESCAPED_CONTROL\u0001");
+    const controlJson = JSON.stringify(controlProject);
+    expect(controlJson).toContain("\\u0001");
+    const controlError = invalidJsonResult(controlJson);
+    expect(controlError.code).toBe("INVALID_PROJECT");
+    expect(JSON.stringify(controlError)).not.toContain(
+      "DO_NOT_LEAK_ESCAPED_CONTROL",
+    );
+  });
+
+  it("maps serialized occupant privacy failures without source disclosure", () => {
+    const input = structuredClone(minimalProject);
+    setAtPath(
+      input,
+      ["rooms", 0, "entities"],
+      [occupantEntity({ identity: "DO_NOT_LEAK_JSON_PRIVATE" })],
+    );
+
+    const error = invalidJsonResult(JSON.stringify(input));
+
+    expect(error.code).toBe("FORBIDDEN_OCCUPANT_ATTRIBUTE");
+    expect(error.path).toEqual(["rooms", 0, "entities", 0]);
+    expect(JSON.stringify(error)).not.toContain("DO_NOT_LEAK_JSON_PRIVATE");
+    expect(JSON.stringify(error)).not.toContain("identity");
+  });
+
   it.each([
     (input: object) => {
       let nested: object = { leaf: "DO_NOT_LEAK_DEPTH" };
@@ -225,7 +371,7 @@ describe("canonical project schema", () => {
     expect(arraySetterWrites).toBe(0);
   });
 
-  it("rejects transparent root proxies without property reads or leaks", () => {
+  it("rejects transparent root proxies through the trusted-value entrypoint", () => {
     const target = structuredClone(minimalProject);
     let propertyGets = 0;
     const input = new Proxy(target, {
