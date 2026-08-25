@@ -80,9 +80,12 @@ describe("canonical units", () => {
     expect(() => cost(2, "")).toThrow("currency must be a non-empty string");
   });
 
-  it("preserves boundary conversion provenance without boxing canonical numbers", () => {
+  it("keeps scalar conversion primitive and preserves provenance at boundaries", () => {
+    const scalar = feetToMetres(10);
     const result = feetToMetres.withProvenance(10, 0.125);
 
+    expect(scalar).toBeCloseTo(3.048, 12);
+    expect(Object(scalar)).not.toHaveProperty("source");
     expect(result).toEqual({
       canonical: 3.048,
       source: { value: 10, unit: "ft", precision: 0.125 },

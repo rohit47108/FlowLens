@@ -51,6 +51,20 @@ export type BoundaryConversion<T> = Readonly<{
   }>;
 }>;
 
+export type FeetToMetresConverter = {
+  /**
+   * Low-level exact scalar conversion. Use this for calculations that only
+   * require canonical SI values.
+   */
+  (feet: number): Metres;
+  /**
+   * Import and persistence boundary conversion. This preserves the supplied
+   * foot value, literal source unit, and stated precision beside the
+   * canonical SI value.
+   */
+  withProvenance(feet: number, precision: number): BoundaryConversion<Metres>;
+};
+
 function finite<Name extends string>(
   value: number,
   label: string,
@@ -214,9 +228,10 @@ function feetToMetresWithProvenance(
   };
 }
 
-export const feetToMetres = Object.assign(feetToMetresValue, {
-  withProvenance: feetToMetresWithProvenance,
-});
+export const feetToMetres: FeetToMetresConverter = Object.assign(
+  feetToMetresValue,
+  { withProvenance: feetToMetresWithProvenance },
+);
 
 export function metresToFeet(value: Metres): number {
   return value / 0.3048;

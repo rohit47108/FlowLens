@@ -5,6 +5,25 @@ declare const scaleBrand: unique symbol;
 
 export const WORLD_FRAME_VERSION = "flowlens-rh-y-up-v1";
 
+export const WORLD_FRAME = Object.freeze({
+  version: WORLD_FRAME_VERSION,
+  handedness: "right-handed",
+  axes: Object.freeze({
+    x: Object.freeze({ direction: "+X", semantic: "room-east-right" }),
+    y: Object.freeze({ direction: "+Y", semantic: "up" }),
+    z: Object.freeze({
+      direction: "+Z",
+      semantic: "room-south-default-isometric-camera",
+    }),
+  }),
+  origin: Object.freeze({
+    plane: "floor",
+    xBoundary: "minimum",
+    zBoundary: "minimum",
+  }),
+  transformOrder: Object.freeze(["scale", "rotation", "translation"]),
+});
+
 export type Vec3<T> = Readonly<{
   x: T;
   y: T;
@@ -33,7 +52,7 @@ export type Transform = Readonly<{
 }>;
 
 export type TransformInput = Readonly<{
-  position: Vec3<Metres>;
+  position: Vec3<number>;
   rotation: Quaternion;
   scale: Vec3<number>;
 }>;
@@ -67,21 +86,27 @@ export function makeQuaternion(
 export function normalizeQuaternion(
   quaternion: Quaternion,
 ): NormalizedQuaternion {
-  const magnitude = Math.hypot(
-    quaternion.x,
-    quaternion.y,
-    quaternion.z,
-    quaternion.w,
+  const maximumComponent = Math.max(
+    Math.abs(quaternion.x),
+    Math.abs(quaternion.y),
+    Math.abs(quaternion.z),
+    Math.abs(quaternion.w),
   );
-  if (magnitude === 0) {
+  if (maximumComponent === 0) {
     throw new Error("quaternion magnitude must be greater than zero");
   }
 
+  const x = quaternion.x / maximumComponent;
+  const y = quaternion.y / maximumComponent;
+  const z = quaternion.z / maximumComponent;
+  const w = quaternion.w / maximumComponent;
+  const scaledMagnitude = Math.hypot(x, y, z, w);
+
   return makeQuaternion(
-    quaternion.x / magnitude,
-    quaternion.y / magnitude,
-    quaternion.z / magnitude,
-    quaternion.w / magnitude,
+    x / scaledMagnitude,
+    y / scaledMagnitude,
+    z / scaledMagnitude,
+    w / scaledMagnitude,
   ) as NormalizedQuaternion;
 }
 
@@ -102,7 +127,7 @@ export function makeTransform({
   scale,
 }: TransformInput): Transform {
   return {
-    position,
+    position: vec3(metres(position.x), metres(position.y), metres(position.z)),
     rotation: normalizeQuaternion(rotation),
     scale: vec3(
       positiveScale(scale.x, "x"),
