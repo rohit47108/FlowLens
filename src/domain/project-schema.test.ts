@@ -85,7 +85,58 @@ function expectPreflightRejection(input: unknown, hostileText: string): void {
   expect(error.message).not.toContain(hostileText);
 }
 
+function defineHostileDataProperty(
+  target: object,
+  key: "__proto__" | "prototype" | "constructor",
+  value: string,
+): void {
+  Object.defineProperty(target, key, {
+    enumerable: true,
+    configurable: true,
+    writable: true,
+    value,
+  });
+}
+
 describe("canonical project schema", () => {
+  it.each(["__proto__", "prototype", "constructor"] as const)(
+    "rejects reserved root meta key %s without copying or leaking it",
+    (key) => {
+      const input = structuredClone(minimalProject);
+      const hostileValue = "DO_NOT_LEAK_RESERVED_KEY";
+      defineHostileDataProperty(input, key, hostileValue);
+
+      expectPreflightRejection(input, hostileValue);
+      expect(Object.getOwnPropertyDescriptor(input, key)).toMatchObject({
+        enumerable: true,
+        value: hostileValue,
+      });
+    },
+  );
+
+  it("rejects an own nested __proto__ data property that parsed before the fix", () => {
+    const input = structuredClone(minimalProject);
+    const preferences = input.preferences as object;
+    const hostileValue = "DO_NOT_LEAK_NESTED_RESERVED_KEY";
+    defineHostileDataProperty(preferences, "__proto__", hostileValue);
+
+    expectPreflightRejection(input, hostileValue);
+    expect(
+      Object.getOwnPropertyDescriptor(preferences, "__proto__"),
+    ).toMatchObject({
+      enumerable: true,
+      value: hostileValue,
+    });
+  });
+
+  it("rejects cyclic records without mutating the hostile graph", () => {
+    const input = structuredClone(minimalProject);
+    setAtPath(input, ["preferences", "cycle"], input);
+
+    expectPreflightRejection(input, "cycle");
+    expect((input.preferences as Record<string, unknown>).cycle).toBe(input);
+  });
+
   it("rejects inherited root fields before schema validation", () => {
     const input = Object.create(minimalProject);
 

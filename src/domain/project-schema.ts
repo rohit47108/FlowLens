@@ -23,6 +23,7 @@ import { BoundaryValidationError } from "./errors";
 const MAX_TEXT_LENGTH = 256;
 const MAX_IDENTIFIER_LENGTH = 128;
 const MAX_COLLECTION_LENGTH = 256;
+const RESERVED_META_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const FORBIDDEN_OCCUPANT_KEYS = new Set([
   "identity",
   "name",
@@ -726,7 +727,7 @@ function sanitizeRecord(
 
   const output: SanitizedRecord = Object.create(null);
   for (const key of Reflect.ownKeys(input)) {
-    if (typeof key !== "string") {
+    if (typeof key !== "string" || RESERVED_META_KEYS.has(key)) {
       return rejectedSanitization;
     }
     const descriptor = Object.getOwnPropertyDescriptor(input, key);
