@@ -1,6 +1,6 @@
 # FlowLens source register
 
-Last verified: 2026-08-24
+Last verified: 2026-08-25
 
 This register records the primary sources used for framework, browser, scientific-computing, and accessibility decisions. Sources inform implementation; they do not override the FlowLens specification or safety boundaries.
 
@@ -18,6 +18,8 @@ This register records the primary sources used for framework, browser, scientifi
 | Interpret a project foot as the international foot | [NIST: U.S. Survey Foot](https://www.nist.gov/pml/us-surveyfoot) | NIST states that the obsolete survey foot is superseded and one foot equals exactly `0.3048` metre for current applications. |
 | Keep the scene frame Y-up and rotation quaternions normalized | [Three.js: `Object3D`](https://threejs.org/docs/pages/Object3D.html) and [`Quaternion`](https://threejs.org/docs/pages/Quaternion.html) | Three.js uses `(0, 1, 0)` as the default up direction and requires normalized quaternions for rotations. FlowLens adds its own explicit right-handed frame version so adapters cannot silently reinterpret coordinates. |
 | Validate every project trust boundary with strict, discriminated schemas | [Zod: defining schemas](https://zod.dev/api), [basic usage](https://zod.dev/basics), and [error customization](https://zod.dev/error-customization#include-input-in-issues) | Zod 4 documents `z.strictObject()` for rejecting unknown fields, `z.discriminatedUnion()` for literal-tagged variants, and `safeParse()` for explicit success/failure results. Validation issues omit source input by default to reduce sensitive-data disclosure; FlowLens does not opt into `reportInput`. |
+| Separate hostile serialized projects from trusted inert values | [MDN: `JSON.parse()`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON/parse) and [`TextEncoder.encode()`](https://developer.mozilla.org/en-US/docs/Web/API/TextEncoder/encode) | `JSON.parse()` constructs a value from primitive JSON text, while `TextEncoder` exposes its UTF-8 bytes. FlowLens bounds UTF-16 code units before UTF-8 allocation, then validates the fresh parsed graph; arbitrary live JavaScript objects are not the untrusted import surface. |
+| Fail closed when supported-realm prototypes drift after parser initialization | [OWASP: Prototype Pollution Prevention](https://cheatsheetseries.owasp.org/cheatsheets/Prototype_Pollution_Prevention_Cheat_Sheet.html), [OWASP testing guidance](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/22-Testing_for_Prototype_Pollution), and [MDN: `Reflect.ownKeys()`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Reflect/ownKeys) | OWASP describes inherited prototype state as a cross-object security hazard and recommends null-prototype data structures where objects are required. `Reflect.ownKeys()` covers every own string and symbol key. FlowLens snapshots exact Object/Array prototype descriptors in an initially trusted realm and rejects later drift before schema output construction. |
 | Use React Router in declarative mode | [React Router: Picking a Mode](https://reactrouter.com/start/modes) | Declarative mode provides URL matching and navigation without imposing loaders, server rendering, or a server runtime. |
 | Keep Three.js behind a React scene adapter | [React Three Fiber: Introduction](https://r3f.docs.pmnd.rs/getting-started/introduction) and [Your First Scene](https://r3f.docs.pmnd.rs/getting-started/your-first-scene) | React Three Fiber 9 pairs with React 19 and exposes Three.js objects through a React renderer. The domain remains authoritative; the scene is only a projection. |
 
@@ -42,6 +44,7 @@ This register records the primary sources used for framework, browser, scientifi
 | Decision | Primary source | Evidence used |
 | --- | --- | --- |
 | Use Vitest for pure domain and component tests | [Vitest: Features](https://vitest.dev/guide/features) and [Coverage](https://vitest.dev/guide/coverage.html) | Vitest shares Vite transforms, supports TypeScript, browser mode, and V8 coverage with explicit include rules. |
+| Use deterministic property and model-based tests for revisioned command sequences | [fast-check: why property-based testing](https://fast-check.dev/docs/introduction/why-property-based/) and [model-based testing](https://fast-check.dev/docs/advanced/model-based-testing/) | fast-check documents fixed seeds for reproducible runs and command sequences for stateful systems. FlowLens pins property parameters, caps generated command sequences at 50 operations, and compares the real immutable aggregate with independent invariants rather than a duplicate implementation. |
 | Use Playwright for integrated browser workflows | [Playwright: Writing Tests](https://playwright.dev/docs/writing-tests) | Playwright provides isolated tests, actionability waiting, and web-first assertions suitable for keyboard, persistence, and responsive workflows. |
 | Target WCAG 2.2 AA with a semantic alternative to the canvas | [W3C: WCAG 2.2](https://www.w3.org/TR/WCAG22/) | The standard covers keyboard access, focus, reflow, contrast, target size, status, and input assistance. FlowLens treats the synchronized form/table workspace as required functionality, not a canvas label. |
 
@@ -56,6 +59,6 @@ The following registry versions and compatibility ranges were checked with `npm 
 - Three.js: `0.185.1`; React Three Fiber: `9.7.0`; Drei: `10.7.8`.
 - TypeScript: `6.0.3`. TypeScript `7.0.2` was rejected because `@typescript-eslint/parser@8.68.0` currently declares support only below TypeScript 6.1.
 - Zod: `4.4.3`; Dexie: `4.4.5`; Zustand: `5.0.15`.
-- Vitest: `4.1.11`; Playwright: `1.62.1`.
+- Vitest: `4.1.11`; fast-check: `4.9.0`; Playwright: `1.62.1`.
 
 Exact installed versions are recorded by `package-lock.json`; this snapshot explains why the initial ranges were chosen.
