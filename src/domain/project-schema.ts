@@ -23,6 +23,10 @@ import { BoundaryValidationError } from "./errors";
 const MAX_TEXT_LENGTH = 256;
 const MAX_IDENTIFIER_LENGTH = 128;
 const MAX_COLLECTION_LENGTH = 256;
+const MAX_INPUT_DEPTH = 32;
+const MAX_RECORD_KEYS = 64;
+const MAX_INPUT_KEY_LENGTH = 128;
+const MAX_SANITIZED_NODES = 65_536;
 const RESERVED_META_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const FORBIDDEN_OCCUPANT_KEYS = new Set([
   "identity",
@@ -642,6 +646,10 @@ interface SanitizedRecord {
 type SanitizationResult =
   | { readonly ok: true; readonly value: SanitizedValue }
   | { readonly ok: false };
+type SanitizationContext = {
+  readonly ancestors: Set<object>;
+  nodes: number;
+};
 
 function sanitized(value: SanitizedValue): SanitizationResult {
   return { ok: true, value };
@@ -654,9 +662,9 @@ function isDataDescriptor(
 ): descriptor is PropertyDescriptor & { readonly value: unknown } {
   return (
     descriptor !== undefined &&
-    descriptor.get === undefined &&
-    descriptor.set === undefined &&
-    Object.hasOwn(descriptor, "value")
+    Object.hasOwn(descriptor, "value") &&
+    !Object.hasOwn(descriptor, "get") &&
+    !Object.hasOwn(descriptor, "set")
   );
 }
 
@@ -670,9 +678,28 @@ function isCanonicalArrayIndex(key: string, length: number): boolean {
   );
 }
 
+function defineSanitizedDataProperty(
+  target: object,
+  key: PropertyKey,
+  value: SanitizedValue,
+): void {
+  const descriptor = Object.create(null) as {
+    value: SanitizedValue;
+    enumerable: boolean;
+    configurable: boolean;
+    writable: boolean;
+  };
+  descriptor.value = value;
+  descriptor.enumerable = true;
+  descriptor.configurable = true;
+  descriptor.writable = true;
+  Object.defineProperty(target, key, descriptor);
+}
+
 function sanitizeArray(
   input: unknown[],
-  ancestors: ReadonlySet<object>,
+  context: SanitizationContext,
+  depth: number,
 ): SanitizationResult {
   if (Object.getPrototypeOf(input) !== Array.prototype) {
     return rejectedSanitization;
@@ -707,51 +734,61 @@ function sanitizeArray(
     ) {
       return rejectedSanitization;
     }
-    const child = sanitizeInput(descriptor.value, ancestors);
+    const child = sanitizeInput(descriptor.value, context, depth + 1);
     if (!child.ok) {
       return rejectedSanitization;
     }
-    output.push(child.value);
+    defineSanitizedDataProperty(output, key, child.value);
   }
   return sanitized(output);
 }
 
 function sanitizeRecord(
   input: object,
-  ancestors: ReadonlySet<object>,
+  context: SanitizationContext,
+  depth: number,
 ): SanitizationResult {
   const prototype = Object.getPrototypeOf(input);
   if (prototype !== Object.prototype && prototype !== null) {
     return rejectedSanitization;
   }
 
+  const keys = Reflect.ownKeys(input);
+  if (keys.length > MAX_RECORD_KEYS) {
+    return rejectedSanitization;
+  }
+
   const output: SanitizedRecord = Object.create(null);
-  for (const key of Reflect.ownKeys(input)) {
-    if (typeof key !== "string" || RESERVED_META_KEYS.has(key)) {
+  for (const key of keys) {
+    if (
+      typeof key !== "string" ||
+      key.length > MAX_INPUT_KEY_LENGTH ||
+      RESERVED_META_KEYS.has(key)
+    ) {
       return rejectedSanitization;
     }
     const descriptor = Object.getOwnPropertyDescriptor(input, key);
     if (!isDataDescriptor(descriptor) || !descriptor.enumerable) {
       return rejectedSanitization;
     }
-    const child = sanitizeInput(descriptor.value, ancestors);
+    const child = sanitizeInput(descriptor.value, context, depth + 1);
     if (!child.ok) {
       return rejectedSanitization;
     }
-    Object.defineProperty(output, key, {
-      value: child.value,
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    });
+    defineSanitizedDataProperty(output, key, child.value);
   }
   return sanitized(output);
 }
 
 function sanitizeInput(
   input: unknown,
-  ancestors: ReadonlySet<object> = new Set(),
+  context: SanitizationContext,
+  depth: number,
 ): SanitizationResult {
+  if (depth > MAX_INPUT_DEPTH || context.nodes >= MAX_SANITIZED_NODES) {
+    return rejectedSanitization;
+  }
+  context.nodes += 1;
   if (
     input === null ||
     typeof input === "boolean" ||
@@ -760,15 +797,29 @@ function sanitizeInput(
   ) {
     return sanitized(input);
   }
-  if (typeof input !== "object" || ancestors.has(input)) {
+  if (typeof input !== "object" || context.ancestors.has(input)) {
     return rejectedSanitization;
   }
 
-  const nextAncestors = new Set(ancestors);
-  nextAncestors.add(input);
-  return Array.isArray(input)
-    ? sanitizeArray(input, nextAncestors)
-    : sanitizeRecord(input, nextAncestors);
+  context.ancestors.add(input);
+  try {
+    return Array.isArray(input)
+      ? sanitizeArray(input, context, depth)
+      : sanitizeRecord(input, context, depth);
+  } finally {
+    context.ancestors.delete(input);
+  }
+}
+
+function hasUnsafeAmbientPrototypeState(): boolean {
+  for (const key of ["get", "set"] as const) {
+    const descriptor = Object.getOwnPropertyDescriptor(Object.prototype, key);
+    if (descriptor !== undefined && !isDataDescriptor(descriptor)) {
+      return true;
+    }
+  }
+
+  return Object.getOwnPropertyDescriptor(Array.prototype, "0") !== undefined;
 }
 
 function normalizedPath(issue: ZodIssue): readonly (string | number)[] {
@@ -882,17 +933,29 @@ function boundaryError(
 
 /**
  * Hostile trust-boundary entrypoint. Public schemas remain composable, while
- * this function accepts only sanitized own-data JSON-shaped project graphs.
+ * this function accepts only bounded sanitized own-data JSON-shaped project
+ * graphs, then uses native structuredClone as an exotic/proxy cloneability gate.
  */
 export function parseProject(input: unknown): ParseResult<Project> {
   try {
-    const sanitizedInput = sanitizeInput(input);
+    const sanitizedInput = sanitizeInput(
+      input,
+      { ancestors: new Set(), nodes: 0 },
+      0,
+    );
     if (!sanitizedInput.ok) {
       return {
         ok: false,
         error: new BoundaryValidationError("INVALID_PROJECT", []),
       };
     }
+    if (hasUnsafeAmbientPrototypeState()) {
+      return {
+        ok: false,
+        error: new BoundaryValidationError("INVALID_PROJECT", []),
+      };
+    }
+    structuredClone(input);
     const result = ProjectSchema.safeParse(sanitizedInput.value);
     if (result.success) {
       return { ok: true, value: result.data };

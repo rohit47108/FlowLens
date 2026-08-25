@@ -98,7 +98,147 @@ function defineHostileDataProperty(
   });
 }
 
+function restoreDescriptor(
+  target: object,
+  key: PropertyKey,
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (descriptor === undefined) {
+    delete (target as Record<PropertyKey, unknown>)[key];
+    return;
+  }
+  Object.defineProperty(target, key, descriptor);
+}
+
 describe("canonical project schema", () => {
+  it.each([
+    (input: object) => {
+      let nested: object = { leaf: "DO_NOT_LEAK_DEPTH" };
+      for (let depth = 0; depth < 33; depth += 1) {
+        nested = { nested };
+      }
+      setAtPath(input, ["deep"], nested);
+      return "DO_NOT_LEAK_DEPTH";
+    },
+    (input: object) => {
+      const record: Record<string, string> = {};
+      for (let index = 0; index < 65; index += 1) {
+        record[`key-${index}`] = "DO_NOT_LEAK_RECORD_BUDGET";
+      }
+      setAtPath(input, ["record"], record);
+      return "DO_NOT_LEAK_RECORD_BUDGET";
+    },
+    (input: object) => {
+      const key = "k".repeat(129);
+      setAtPath(input, [key], "DO_NOT_LEAK_KEY_BUDGET");
+      return "DO_NOT_LEAK_KEY_BUDGET";
+    },
+    (input: object) => {
+      const matrix = Array.from({ length: 256 }, () =>
+        Array.from({ length: 256 }, () => 0),
+      );
+      setAtPath(input, ["matrix"], matrix);
+      return "matrix";
+    },
+  ])("rejects over-budget preflight graphs without leaking data", (mutate) => {
+    const input = structuredClone(minimalProject);
+
+    expectPreflightRejection(input, mutate(input));
+  });
+
+  it("does not consult polluted descriptor or array-setter prototypes", () => {
+    const input = structuredClone(minimalProject);
+    setAtPath(input, ["name"], "SENTINEL_OWN_DATA");
+    const originalGet = Object.getOwnPropertyDescriptor(
+      Object.prototype,
+      "get",
+    );
+    const originalSet = Object.getOwnPropertyDescriptor(
+      Object.prototype,
+      "set",
+    );
+    const originalIndex = Object.getOwnPropertyDescriptor(Array.prototype, "0");
+    let descriptorAccessorReads = 0;
+    let arraySetterWrites = 0;
+    let result;
+
+    try {
+      Object.defineProperty(
+        Object.prototype,
+        "get",
+        Object.assign(Object.create(null), {
+          configurable: true,
+          get() {
+            descriptorAccessorReads += 1;
+            return undefined;
+          },
+        }),
+      );
+      Object.defineProperty(
+        Object.prototype,
+        "set",
+        Object.assign(Object.create(null), {
+          configurable: true,
+          get() {
+            descriptorAccessorReads += 1;
+            return undefined;
+          },
+        }),
+      );
+      Object.defineProperty(
+        Array.prototype,
+        "0",
+        Object.assign(Object.create(null), {
+          configurable: true,
+          set(value: unknown) {
+            arraySetterWrites += 1;
+            Object.defineProperty(
+              this,
+              "0",
+              Object.assign(Object.create(null), {
+                configurable: true,
+                enumerable: true,
+                writable: true,
+                value,
+              }),
+            );
+          },
+        }),
+      );
+
+      descriptorAccessorReads = 0;
+      arraySetterWrites = 0;
+      result = parseProject(input);
+    } finally {
+      restoreDescriptor(Object.prototype, "get", originalGet);
+      restoreDescriptor(Object.prototype, "set", originalSet);
+      restoreDescriptor(Array.prototype, "0", originalIndex);
+    }
+
+    expect(result?.ok).toBe(false);
+    if (result?.ok === false) {
+      expect(result.error.code).toBe("INVALID_PROJECT");
+      expect(result.error.path).toEqual([]);
+      expect(JSON.stringify(result.error)).not.toContain("SENTINEL_OWN_DATA");
+    }
+    expect(descriptorAccessorReads).toBe(0);
+    expect(arraySetterWrites).toBe(0);
+  });
+
+  it("rejects transparent root proxies without property reads or leaks", () => {
+    const target = structuredClone(minimalProject);
+    let propertyGets = 0;
+    const input = new Proxy(target, {
+      get(targetValue, property, receiver) {
+        propertyGets += 1;
+        return Reflect.get(targetValue, property, receiver);
+      },
+    });
+
+    expectPreflightRejection(input, "project-synthetic-001");
+    expect(propertyGets).toBe(0);
+  });
+
   it.each(["__proto__", "prototype", "constructor"] as const)(
     "rejects reserved root meta key %s without copying or leaking it",
     (key) => {
