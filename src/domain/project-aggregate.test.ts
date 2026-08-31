@@ -21,6 +21,16 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
+function firstMutablePath(value: unknown, path = "$"): string | null {
+  if (value === null || typeof value !== "object") return null;
+  if (!Object.isFrozen(value)) return path;
+  for (const [key, child] of Object.entries(value)) {
+    const mutablePath = firstMutablePath(child, `${path}.${key}`);
+    if (mutablePath !== null) return mutablePath;
+  }
+  return null;
+}
+
 function setAtPath(
   target: object,
   path: readonly (string | number)[],
@@ -343,6 +353,111 @@ describe("dispatchProjectCommand", () => {
     expect(replay.historyEntry).toBe(first.historyEntry);
   });
 
+  it("rejects copied replay records and returns only deeply frozen genuine artifacts", () => {
+    const project = projectFixture();
+    const command = {
+      type: "RENAME_PROJECT" as const,
+      ...envelope(project, {
+        commandId: "command-authoritative-replay",
+        idempotencyKey: "idempotency-authoritative-replay",
+      }),
+      name: "Authoritative replay",
+    };
+    const first = dispatchProjectCommand(project, command, context());
+    if (!first.ok) throw new Error("Expected replay setup to succeed");
+    const copiedRecord = structuredClone(first.idempotencyRecord);
+
+    expect(
+      dispatchProjectCommand(first.project, command, context([copiedRecord])),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "IDEMPOTENCY_CONFLICT" },
+    });
+
+    const replay = dispatchProjectCommand(
+      first.project,
+      command,
+      context([first.idempotencyRecord]),
+    );
+    if (!replay.ok) throw new Error("Expected genuine replay to succeed");
+    expect(replay.replayed).toBe(true);
+    expect(firstMutablePath(replay)).toBeNull();
+    expect(firstMutablePath(replay.idempotencyRecord)).toBeNull();
+  });
+
+  it("derives revision uniqueness from committed records when hint arrays are empty", () => {
+    const project = projectFixture();
+    const first = dispatchProjectCommand(
+      project,
+      {
+        type: "RENAME_PROJECT",
+        ...envelope(project, {
+          commandId: "command-revision-authority-first",
+          idempotencyKey: "idempotency-revision-authority-first",
+          nextProjectRevision: "revision-project-authority-first",
+        }),
+        name: "First revision authority",
+      },
+      context(),
+    );
+    if (!first.ok) throw new Error("Expected first revision to commit");
+
+    expect(
+      dispatchProjectCommand(
+        first.project,
+        {
+          type: "RENAME_PROJECT",
+          ...envelope(first.project, {
+            commandId: "command-revision-authority-second",
+            idempotencyKey: "idempotency-revision-authority-second",
+            nextProjectRevision: project.revisionId,
+          }),
+          name: "Reused historical revision",
+        },
+        context([first.idempotencyRecord]),
+      ),
+    ).toMatchObject({ ok: false, error: { code: "REVISION_CONFLICT" } });
+  });
+
+  it("derives room revision uniqueness from committed records", () => {
+    const project = projectFixture();
+    const entityId = project.rooms[0]!.entities[0]!.entityId;
+    const first = dispatchProjectCommand(
+      project,
+      {
+        type: "MOVE_ENTITY",
+        ...roomEnvelope(project, {
+          commandId: "command-room-revision-authority-first",
+          idempotencyKey: "idempotency-room-revision-authority-first",
+          nextProjectRevision: "revision-project-room-authority-first",
+          nextRoomRevision: "revision-room-authority-first",
+        }),
+        entityId,
+        position: { x: 2, y: 0, z: 2 },
+      },
+      context(),
+    );
+    if (!first.ok) throw new Error("Expected first room revision to commit");
+
+    expect(
+      dispatchProjectCommand(
+        first.project,
+        {
+          type: "MOVE_ENTITY",
+          ...roomEnvelope(first.project, {
+            commandId: "command-room-revision-authority-second",
+            idempotencyKey: "idempotency-room-revision-authority-second",
+            nextProjectRevision: "revision-project-room-authority-second",
+            nextRoomRevision: project.rooms[0]!.revisionId,
+          }),
+          entityId,
+          position: { x: 3, y: 0, z: 3 },
+        },
+        context([first.idempotencyRecord]),
+      ),
+    ).toMatchObject({ ok: false, error: { code: "REVISION_CONFLICT" } });
+  });
+
   it("rejects a replay record whose committed artifacts were substituted", () => {
     const project = projectFixture();
     const command = {
@@ -421,10 +536,28 @@ describe("dispatchProjectCommand", () => {
       ),
     ).toMatchObject({ ok: false, error: { code: "IDEMPOTENCY_CONFLICT" } });
 
-    const otherProjectRecord = {
-      ...first.idempotencyRecord,
+    const otherProjectInput = {
+      ...structuredClone(project),
       projectId: "project-other",
-    } as unknown as IdempotencyRecord;
+      revisionId: "revision-project-other-start",
+    };
+    const otherProject = parseProject(otherProjectInput);
+    if (!otherProject.ok) throw new Error("Expected other project to parse");
+    const otherProjectResult = dispatchProjectCommand(
+      otherProject.value,
+      {
+        type: "RENAME_PROJECT",
+        ...envelope(otherProject.value, {
+          commandId: "command-other-project-record",
+          nextProjectRevision: "revision-project-other-next",
+        }),
+        name: "Other project record",
+      },
+      context(),
+    );
+    if (!otherProjectResult.ok) {
+      throw new Error("Expected other project record to commit");
+    }
     expect(
       dispatchProjectCommand(
         project,
@@ -433,7 +566,7 @@ describe("dispatchProjectCommand", () => {
           commandId: "command-other-project-key-scope",
           name: "Not the other project record",
         },
-        context([otherProjectRecord]),
+        context([otherProjectResult.idempotencyRecord]),
       ),
     ).toMatchObject({ ok: true, replayed: false });
   });

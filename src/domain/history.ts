@@ -65,6 +65,25 @@ export function createHistoryState(projectId: string): HistoryState {
   });
 }
 
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+  if (value === null || typeof value !== "object" || seen.has(value)) {
+    return value;
+  }
+  seen.add(value);
+  for (const child of Object.values(value)) {
+    deepFreeze(child, seen);
+  }
+  return Object.freeze(value);
+}
+
+function detachHistoryState(state: HistoryState): HistoryState {
+  try {
+    return deepFreeze(structuredClone(state));
+  } catch {
+    throw new Error("History state is invalid.");
+  }
+}
+
 function markNonApplicable(
   entry: HistoryEntry,
   reason: HistoryInvalidationReason,
@@ -79,30 +98,32 @@ export function appendHistory(
   state: HistoryState,
   result: SuccessfulCommandResult,
 ): HistoryState {
+  const currentState = detachHistoryState(state);
   if (result.idempotencyRecord.historyExecution !== null) {
     throw new Error("History execution result cannot be appended.");
   }
-  if (result.replayed) return state;
+  if (result.replayed) return currentState;
   if (
-    state.projectId !== result.project.projectId ||
-    result.historyEntry.forwardCommand.projectId !== state.projectId ||
-    (state.headProjectRevisionId !== null &&
-      state.headProjectRevisionId !== result.auditRecord.priorProjectRevision)
+    currentState.projectId !== result.project.projectId ||
+    result.historyEntry.forwardCommand.projectId !== currentState.projectId ||
+    (currentState.headProjectRevisionId !== null &&
+      currentState.headProjectRevisionId !==
+        result.auditRecord.priorProjectRevision)
   ) {
     throw new Error("History state project mismatch.");
   }
-  if (state.past.length + state.future.length >= 4096) {
+  if (currentState.past.length + currentState.future.length >= 4096) {
     throw new Error("History state capacity exceeded.");
   }
-  const displacedFuture = state.future.map((entry) =>
+  const displacedFuture = currentState.future.map((entry) =>
     markNonApplicable(entry, "LOCAL_BRANCH"),
   );
-  return Object.freeze({
-    projectId: state.projectId,
+  return detachHistoryState({
+    projectId: currentState.projectId,
     headProjectRevisionId: result.project.revisionId,
-    past: Object.freeze([...state.past, result.historyEntry]),
-    future: Object.freeze(displacedFuture),
-    replayReceipts: state.replayReceipts,
+    past: [...currentState.past, result.historyEntry],
+    future: displacedFuture,
+    replayReceipts: currentState.replayReceipts,
   });
 }
 
@@ -110,16 +131,15 @@ export function invalidateHistory(
   state: HistoryState,
   reason: Exclude<HistoryInvalidationReason, "LOCAL_BRANCH">,
 ): HistoryState {
-  return Object.freeze({
-    projectId: state.projectId,
-    headProjectRevisionId: state.headProjectRevisionId,
-    past: Object.freeze(
-      state.past.map((entry) => markNonApplicable(entry, reason)),
+  const currentState = detachHistoryState(state);
+  return detachHistoryState({
+    projectId: currentState.projectId,
+    headProjectRevisionId: currentState.headProjectRevisionId,
+    past: currentState.past.map((entry) => markNonApplicable(entry, reason)),
+    future: currentState.future.map((entry) =>
+      markNonApplicable(entry, reason),
     ),
-    future: Object.freeze(
-      state.future.map((entry) => markNonApplicable(entry, reason)),
-    ),
-    replayReceipts: state.replayReceipts,
+    replayReceipts: currentState.replayReceipts,
   });
 }
 

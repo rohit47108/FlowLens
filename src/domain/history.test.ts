@@ -93,6 +93,30 @@ function semanticProject(project: Project) {
   };
 }
 
+function canonicalJson(value: unknown): string {
+  const normalize = (candidate: unknown): unknown => {
+    if (Array.isArray(candidate)) return candidate.map(normalize);
+    if (candidate !== null && typeof candidate === "object") {
+      return Object.fromEntries(
+        Object.keys(candidate)
+          .sort()
+          .map((key) => [
+            key,
+            normalize((candidate as Record<string, unknown>)[key]),
+          ]),
+      );
+    }
+    return candidate;
+  };
+  return JSON.stringify(normalize(value));
+}
+
+function isDeeplyFrozen(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return true;
+  if (!Object.isFrozen(value)) return false;
+  return Object.values(value).every((child) => isDeeplyFrozen(child));
+}
+
 describe("command history", () => {
   it("undoes and redoes semantic state with fresh revision identity", () => {
     const initial = projectFixture();
@@ -175,8 +199,8 @@ describe("command history", () => {
     );
     if (!retried.ok) throw new Error("Expected room undo retry to replay");
     expect(retried.commandResult.replayed).toBe(true);
-    expect(retried.project).toBe(undone.project);
-    expect(retried.history).toBe(undone.history);
+    expect(retried.project).toEqual(undone.project);
+    expect(retried.history).toEqual(undone.history);
 
     const redone = redo(
       undone.project,
@@ -300,14 +324,25 @@ describe("command history", () => {
       if (!undone.ok) throw new Error(`Expected ${type} undo to succeed`);
       expect(semanticProject(undone.project)).toEqual(semanticProject(initial));
 
+      const redoEnvelope = historyRequest(
+        undone.project,
+        `redo-${suffix}`,
+        `revision-room-redo-${suffix}`,
+      );
       const redone = redo(
         undone.project,
         undone.history,
-        historyRequest(
-          undone.project,
-          `redo-${suffix}`,
-          `revision-room-redo-${suffix}`,
-        ),
+        type === "RENAME_PROJECT"
+          ? {
+              commandId: redoEnvelope.commandId,
+              idempotencyKey: redoEnvelope.idempotencyKey,
+              occurredAtUtc: redoEnvelope.occurredAtUtc,
+              causalParentRevisionId: redoEnvelope.causalParentRevisionId,
+              expectedProjectRevisionId: redoEnvelope.expectedProjectRevisionId,
+              nextProjectRevision: redoEnvelope.nextProjectRevision,
+              leaseFence: redoEnvelope.leaseFence,
+            }
+          : redoEnvelope,
         contextWith(forward, undone.commandResult),
       );
       if (!redone.ok) throw new Error(`Expected ${type} redo to succeed`);
@@ -316,6 +351,52 @@ describe("command history", () => {
       );
     },
   );
+
+  it("replays and undoes a duplicate whose valid quaternion required normalization", () => {
+    const initial = projectFixture();
+    const source = initial.rooms[0]!.entities[0]!;
+    const command = {
+      type: "DUPLICATE_ENTITY" as const,
+      commandId: "command-duplicate-normalized",
+      idempotencyKey: "idempotency-duplicate-normalized",
+      projectId: initial.projectId,
+      occurredAtUtc: "2026-08-25T14:20:00.000Z",
+      causalParentRevisionId: initial.revisionId,
+      expectedProjectRevisionId: initial.revisionId,
+      nextProjectRevision: "revision-project-duplicate-normalized",
+      leaseFence: 7,
+      roomId: initial.rooms[0]!.roomId,
+      expectedRoomRevision: initial.rooms[0]!.revisionId,
+      nextRoomRevision: "revision-room-duplicate-normalized",
+      entityId: source.entityId,
+      newEntityId: "entity-duplicate-normalized",
+      newLabel: "Normalized duplicate",
+      newTransform: {
+        position: { x: 2, y: 0, z: 2 },
+        rotation: { x: 0, y: 0, z: 0, w: 2 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+    };
+    const forward = dispatchProjectCommand(initial, command, dispatchContext);
+    if (!forward.ok) throw new Error("Expected duplicate to succeed");
+
+    expect(
+      dispatchProjectCommand(forward.project, command, contextWith(forward)),
+    ).toMatchObject({ ok: true, replayed: true });
+
+    const undone = undo(
+      forward.project,
+      appendHistory(createHistoryState(initial.projectId), forward),
+      historyRequest(
+        forward.project,
+        "undo-duplicate-normalized",
+        "revision-room-undo-duplicate-normalized",
+      ),
+      contextWith(forward),
+    );
+    if (!undone.ok) throw new Error("Expected normalized duplicate undo");
+    expect(semanticProject(undone.project)).toEqual(semanticProject(initial));
+  });
 
   it("undoes and redoes a subtype-preserving entity deletion", () => {
     const base = projectFixture();
@@ -621,8 +702,12 @@ describe("command history", () => {
     });
     if (!retried.ok) throw new Error("Expected exact undo retry to replay");
     expect(retried.commandResult.replayed).toBe(true);
-    expect(retried.project).toBe(undone.project);
-    expect(retried.history).toBe(undone.history);
+    expect(retried.project).toEqual(undone.project);
+    expect(retried.history).toEqual(undone.history);
+    expect(retried.project).not.toBe(undone.project);
+    expect(retried.history).not.toBe(undone.history);
+    expect(isDeeplyFrozen(retried.project)).toBe(true);
+    expect(isDeeplyFrozen(retried.history)).toBe(true);
   });
 
   it("rejects an exact history retry against an ambiguous current aggregate", () => {
@@ -689,6 +774,63 @@ describe("command history", () => {
     expect(() => appendHistory(history, undone.commandResult)).toThrow(
       "History execution result cannot be appended.",
     );
+  });
+
+  it("detaches and deeply freezes public history helper outputs", () => {
+    const initial = projectFixture();
+    const forward = forwardMove(initial);
+    const history = appendHistory(
+      createHistoryState(initial.projectId),
+      forward,
+    );
+    const later = dispatchProjectCommand(
+      forward.project,
+      {
+        type: "RENAME_PROJECT",
+        commandId: "command-history-detach-later",
+        idempotencyKey: "idempotency-history-detach-later",
+        projectId: initial.projectId,
+        occurredAtUtc: "2026-08-25T13:04:00.000Z",
+        causalParentRevisionId: forward.project.revisionId,
+        expectedProjectRevisionId: forward.project.revisionId,
+        nextProjectRevision: "revision-project-history-detach-later",
+        leaseFence: 7,
+        name: "Detached history",
+      },
+      contextWith(forward),
+    );
+    if (!later.ok) throw new Error("Expected detach setup to succeed");
+    const mutableAppendInput = structuredClone(history);
+    const mutableInvalidationInput = structuredClone(history);
+    const appended = appendHistory(mutableAppendInput, later);
+    const invalidated = invalidateHistory(mutableInvalidationInput, "IMPORT");
+    const originalCommandId = history.past[0]!.forwardCommand.commandId;
+
+    (mutableAppendInput.replayReceipts as unknown as unknown[]).push({
+      forged: true,
+    });
+    (
+      mutableAppendInput.past[0]!.forwardCommand as unknown as {
+        commandId: string;
+      }
+    ).commandId = "command-mutated-through-alias";
+    (mutableInvalidationInput.replayReceipts as unknown as unknown[]).push({
+      forged: true,
+    });
+    (
+      mutableInvalidationInput.past[0]!.forwardCommand as unknown as {
+        commandId: string;
+      }
+    ).commandId = "command-mutated-invalidation-alias";
+
+    expect(appended.replayReceipts).toHaveLength(0);
+    expect(appended.past[0]!.forwardCommand.commandId).toBe(originalCommandId);
+    expect(invalidated.replayReceipts).toHaveLength(0);
+    expect(invalidated.past[0]!.forwardCommand.commandId).toBe(
+      originalCommandId,
+    );
+    expect(isDeeplyFrozen(appended)).toBe(true);
+    expect(isDeeplyFrozen(invalidated)).toBe(true);
   });
 
   it("keeps restored history unchanged when its exact undo record already committed", () => {
@@ -759,8 +901,8 @@ describe("command history", () => {
     });
     if (!retried.ok) throw new Error("Expected restored retry to replay");
     expect(retried.commandResult.replayed).toBe(true);
-    expect(retried.project).toBe(later.project);
-    expect(retried.history).toBe(restoredHistory);
+    expect(retried.project).toEqual(later.project);
+    expect(retried.history).toEqual(restoredHistory);
     expect(retried.project.name).toBe("Later committed name");
   });
 
@@ -801,8 +943,8 @@ describe("command history", () => {
     });
     if (!retried.ok) throw new Error("Expected exact redo retry to replay");
     expect(retried.commandResult.replayed).toBe(true);
-    expect(retried.project).toBe(redone.project);
-    expect(retried.history).toBe(redone.history);
+    expect(retried.project).toEqual(redone.project);
+    expect(retried.history).toEqual(redone.history);
   });
 
   it("supports repeated fresh undo and redo cycles", () => {
@@ -908,7 +1050,7 @@ describe("command history", () => {
     if (!invalidatedRetry.ok)
       throw new Error("Expected retry after invalidation to replay");
     expect(invalidatedRetry.commandResult.replayed).toBe(true);
-    expect(invalidatedRetry.history).toBe(invalidated);
+    expect(invalidatedRetry.history).toEqual(invalidated);
 
     const branch = dispatchProjectCommand(
       undone.project,
@@ -938,8 +1080,8 @@ describe("command history", () => {
     if (!branchRetry.ok)
       throw new Error("Expected retry after local branch to replay");
     expect(branchRetry.commandResult.replayed).toBe(true);
-    expect(branchRetry.project).toBe(branch.project);
-    expect(branchRetry.history).toBe(branchedHistory);
+    expect(branchRetry.project).toEqual(branch.project);
+    expect(branchRetry.history).toEqual(branchedHistory);
   });
 
   it("checks availability and fence before history or replay details", () => {
@@ -1049,6 +1191,40 @@ describe("command history", () => {
     ).toMatchObject({ ok: false, error: { code: "INVALID_COMMAND" } });
   });
 
+  it("forbids a room revision on project-only history", () => {
+    const initial = projectFixture();
+    const renamed = dispatchProjectCommand(
+      initial,
+      {
+        type: "RENAME_PROJECT",
+        commandId: "command-project-only-history",
+        idempotencyKey: "idempotency-project-only-history",
+        projectId: initial.projectId,
+        occurredAtUtc: "2026-08-25T16:20:00.000Z",
+        causalParentRevisionId: initial.revisionId,
+        expectedProjectRevisionId: initial.revisionId,
+        nextProjectRevision: "revision-project-only-history",
+        leaseFence: 7,
+        name: "Project-only history",
+      },
+      dispatchContext,
+    );
+    if (!renamed.ok) throw new Error("Expected rename to succeed");
+
+    expect(
+      undo(
+        renamed.project,
+        appendHistory(createHistoryState(initial.projectId), renamed),
+        historyRequest(
+          renamed.project,
+          "project-only-extra-room",
+          "revision-room-project-only-extra",
+        ),
+        contextWith(renamed),
+      ),
+    ).toMatchObject({ ok: false, error: { code: "INVALID_COMMAND" } });
+  });
+
   it("requires exactly one matching committed record for a fresh top entry", () => {
     const initial = projectFixture();
     const forward = forwardMove(initial);
@@ -1083,6 +1259,52 @@ describe("command history", () => {
         ...dispatchContext,
         idempotencyRecords: [mismatchedRecord],
       }),
+    ).toMatchObject({ ok: false, error: { code: "INVALID_HISTORY" } });
+  });
+
+  it("rejects a forged inverse even when its caller recomputes the checksum", () => {
+    const initial = projectFixture();
+    const forward = forwardMove(initial);
+    const history = appendHistory(
+      createHistoryState(initial.projectId),
+      forward,
+    );
+    const forgedInverse = {
+      ...forward.historyEntry.inverse,
+      position: { x: 99, y: 0, z: 99 },
+    };
+    const forgedEntry = {
+      ...forward.historyEntry,
+      inverse: forgedInverse,
+    };
+    const forgedCommitted = {
+      ...forward.idempotencyRecord.committed,
+      historyEntry: forgedEntry,
+    };
+    const forgedRecord = {
+      ...forward.idempotencyRecord,
+      committedFingerprint: canonicalJson(forgedCommitted),
+      committed: forgedCommitted,
+    };
+    const forgedHistory = {
+      ...structuredClone(history),
+      past: [{ ...structuredClone(history.past[0]!), inverse: forgedInverse }],
+    } as HistoryState;
+
+    expect(
+      undo(
+        forward.project,
+        forgedHistory,
+        historyRequest(
+          forward.project,
+          "recomputed-forgery",
+          "revision-room-recomputed-forgery",
+        ),
+        {
+          ...dispatchContext,
+          idempotencyRecords: [forgedRecord],
+        },
+      ),
     ).toMatchObject({ ok: false, error: { code: "INVALID_HISTORY" } });
   });
 
@@ -1172,7 +1394,9 @@ describe("command history", () => {
     );
     if (!replay.ok) throw new Error("Expected replay to succeed");
     expect(replay.replayed).toBe(true);
-    expect(appendHistory(history, replay)).toBe(history);
+    const replayHistory = appendHistory(history, replay);
+    expect(replayHistory).toEqual(history);
+    expect(replayHistory).not.toBe(history);
   });
 
   it("rejects a forged internal inverse without exposing its payload", () => {

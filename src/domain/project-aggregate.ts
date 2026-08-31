@@ -29,6 +29,7 @@ import type {
 const MAX_COLLECTION_LENGTH = 256;
 const MAX_HISTORY_RECORDS = 4096;
 const REJECTION_MESSAGE = "Command was rejected.";
+const trustedIdempotencyRecords = new WeakSet<object>();
 
 export type CommandErrorCode =
   | "INVALID_COMMAND"
@@ -212,6 +213,17 @@ function assertNever(value: never): never {
   throw new Error(`Unhandled command variant: ${String(value)}`);
 }
 
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+  if (value === null || typeof value !== "object" || seen.has(value)) {
+    return value;
+  }
+  seen.add(value);
+  for (const child of Object.values(value)) {
+    deepFreeze(child, seen);
+  }
+  return Object.freeze(value);
+}
+
 function canonicalize(value: unknown): CanonicalCommandValue {
   if (
     value === null ||
@@ -367,7 +379,16 @@ function revisionIsKnown(
     candidate === project.revisionId ||
     project.rooms.some((room) => room.revisionId === candidate) ||
     context.knownProjectRevisionIds.includes(candidate) ||
-    context.knownRoomRevisionIds.includes(candidate)
+    context.knownRoomRevisionIds.includes(candidate) ||
+    context.idempotencyRecords.some((record) => {
+      const audit = record.committed.auditRecord;
+      return (
+        audit.priorProjectRevision === candidate ||
+        audit.newProjectRevision === candidate ||
+        audit.priorRoomRevision === candidate ||
+        audit.newRoomRevision === candidate
+      );
+    })
   );
 }
 
@@ -1081,7 +1102,7 @@ function committedProjectMatchesCommand(
         room.revisionId === command.nextRoomRevision &&
         entity !== null &&
         entity.label === command.newLabel &&
-        valuesEqual(entity.transform, command.newTransform) &&
+        valuesEqual(entity.transform, makeTransform(command.newTransform)) &&
         room.entities.at(-1)?.entityId === command.newEntityId
       );
     }
@@ -1118,6 +1139,7 @@ function idempotencyRecordMatchesCommand(
 ): boolean {
   try {
     if (
+      !trustedIdempotencyRecords.has(record) ||
       record.projectId !== command.projectId ||
       record.idempotencyKey !== command.idempotencyKey ||
       record.commandFingerprint !== fingerprint ||
@@ -1178,6 +1200,12 @@ function historyExecutionMatches(
   );
 }
 
+function contextRecordsAreTrusted(context: DispatchContext): boolean {
+  return context.idempotencyRecords.every((record) =>
+    trustedIdempotencyRecords.has(record),
+  );
+}
+
 function dispatchValidated(
   project: Project,
   command: InternalProjectCommand,
@@ -1194,6 +1222,9 @@ function dispatchValidated(
   }
   const duplicateError = duplicateStateError(project);
   if (duplicateError !== null) return reject(duplicateError);
+  if (!contextRecordsAreTrusted(context)) {
+    return reject("IDEMPOTENCY_CONFLICT");
+  }
 
   const canonicalCommand = canonicalize(command);
   const fingerprint = commandFingerprint(canonicalCommand);
@@ -1245,7 +1276,7 @@ function dispatchValidated(
   if (!parsedOutput.ok) return reject("INVALID_PROJECT");
 
   const auditRecord = buildAuditRecord(project, command);
-  const historyEntry: HistoryEntry = Object.freeze({
+  const historyEntry: HistoryEntry = deepFreeze({
     historyEntryId: command.commandId,
     forwardCommand: command,
     forward: forwardResult.data,
@@ -1253,12 +1284,12 @@ function dispatchValidated(
     affectedRoomId: commandRoomId(command),
     applicability: Object.freeze({ status: "APPLICABLE" }),
   });
-  const committed: CommittedCommandArtifacts = Object.freeze({
+  const committed: CommittedCommandArtifacts = deepFreeze({
     project: parsedOutput.value,
     auditRecord,
     historyEntry,
   });
-  const idempotencyRecord: IdempotencyRecord = Object.freeze({
+  const idempotencyRecord: IdempotencyRecord = deepFreeze({
     projectId: command.projectId,
     idempotencyKey: command.idempotencyKey,
     commandFingerprint: fingerprint,
@@ -1268,7 +1299,8 @@ function dispatchValidated(
       historyExecution === null ? null : Object.freeze({ ...historyExecution }),
     committed,
   });
-  return Object.freeze({
+  trustedIdempotencyRecords.add(idempotencyRecord);
+  return deepFreeze({
     ok: true,
     replayed: false,
     ...committed,
@@ -1777,6 +1809,40 @@ function expectedRoomRevisionForHistory(
   }
 }
 
+function historyCommandRequiresNextRoomRevision(
+  semantic: InternalHistoryCommand,
+): boolean {
+  switch (semantic.type) {
+    case "CREATE_ROOM":
+    case "ADD_ENTITY":
+    case "MOVE_ENTITY":
+    case "RESIZE_ENTITY":
+    case "ROTATE_ENTITY":
+    case "SET_ENTITY_VISIBILITY":
+    case "SET_ENTITY_LOCK":
+    case "DUPLICATE_ENTITY":
+    case "DELETE_ENTITY":
+    case "DELETE_ROOM":
+    case "REMOVE_ADDED_ENTITY":
+    case "RESTORE_DELETED_ENTITY":
+      return true;
+    case "RENAME_PROJECT":
+      return false;
+    default:
+      return assertNever(semantic);
+  }
+}
+
+function historyEnvelopeMatchesSemantic(
+  semantic: InternalHistoryCommand,
+  request: HistoryReplayEnvelope,
+): boolean {
+  return (
+    (request.nextRoomRevision !== undefined) ===
+    historyCommandRequiresNextRoomRevision(semantic)
+  );
+}
+
 function executeHistory(
   direction: "UNDO" | "REDO",
   project: Project,
@@ -1791,6 +1857,7 @@ function executeHistory(
       message: REJECTION_MESSAGE,
     });
   }
+  deepFreeze(guardedProject.value);
   if (context.projectAvailability !== "AVAILABLE") {
     return historyFailure({
       code: "PROJECT_UNAVAILABLE",
@@ -1826,13 +1893,16 @@ function executeHistory(
       message: REJECTION_MESSAGE,
     });
   }
+  if (!contextRecordsAreTrusted(context)) {
+    return historyFailure(simpleHistoryError("INVALID_HISTORY"));
+  }
   let currentHistory: HistoryState;
   try {
     const historyResult = HistoryStateSchema.safeParse(history);
     if (!historyResult.success) {
       return historyFailure(simpleHistoryError("INVALID_HISTORY"));
     }
-    currentHistory = historyResult.data as HistoryState;
+    currentHistory = deepFreeze(historyResult.data as HistoryState);
   } catch {
     return historyFailure(simpleHistoryError("INVALID_HISTORY"));
   }
@@ -1851,6 +1921,24 @@ function executeHistory(
   }
   const matchingReceipt = matchingReceipts[0];
   if (matchingReceipt !== undefined) {
+    const receiptEntry = [
+      ...currentHistory.past,
+      ...currentHistory.future,
+    ].find(
+      (candidate) =>
+        candidate.historyEntryId === matchingReceipt.historyEntryId,
+    );
+    if (receiptEntry === undefined) {
+      return historyFailure(simpleHistoryError("INVALID_HISTORY"));
+    }
+    const receiptSemantic =
+      direction === "UNDO" ? receiptEntry.inverse : receiptEntry.forward;
+    if (!historyEnvelopeMatchesSemantic(receiptSemantic, parsedRequest)) {
+      return historyFailure({
+        code: "INVALID_COMMAND",
+        message: REJECTION_MESSAGE,
+      });
+    }
     if (
       matchingReceipt.direction !== direction ||
       !canonicalEqual(
@@ -1886,8 +1974,8 @@ function executeHistory(
     }
     return Object.freeze({
       ok: true,
-      project,
-      history,
+      project: guardedProject.value,
+      history: currentHistory,
       commandResult: replayResult(matchingRecords[0]!),
     });
   }
@@ -1907,6 +1995,13 @@ function executeHistory(
   if (entry.applicability.status === "NON_APPLICABLE") {
     return historyFailure(notApplicableError(entry.applicability.reason));
   }
+  const semantic = direction === "UNDO" ? entry.inverse : entry.forward;
+  if (!historyEnvelopeMatchesSemantic(semantic, parsedRequest)) {
+    return historyFailure({
+      code: "INVALID_COMMAND",
+      message: REJECTION_MESSAGE,
+    });
+  }
   const freshnessError = historyReplayFreshnessError(
     currentHistory,
     parsedRequest,
@@ -1917,7 +2012,6 @@ function executeHistory(
       message: REJECTION_MESSAGE,
     });
   }
-  const semantic = direction === "UNDO" ? entry.inverse : entry.forward;
   const expectedRoomRevision = expectedRoomRevisionForHistory(
     guardedProject.value,
     semantic,
@@ -1943,8 +2037,8 @@ function executeHistory(
   if (commandResult.ok && commandResult.replayed) {
     return Object.freeze({
       ok: true,
-      project,
-      history,
+      project: guardedProject.value,
+      history: currentHistory,
       commandResult,
     });
   }
