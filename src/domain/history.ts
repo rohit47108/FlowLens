@@ -6,6 +6,16 @@ import type {
   SuccessfulCommandResult,
 } from "./project-aggregate";
 
+const TrustedWeakSet = WeakSet;
+const objectFreeze = Object.freeze;
+const objectValues = Object.values;
+const weakSetHas = Function.prototype.call.bind(
+  TrustedWeakSet.prototype.has,
+) as (set: WeakSet<object>, value: object) => boolean;
+const weakSetAdd = Function.prototype.call.bind(
+  TrustedWeakSet.prototype.add,
+) as (set: WeakSet<object>, value: object) => WeakSet<object>;
+
 export type HistoryState = Readonly<{
   projectId: string;
   headProjectRevisionId: string | null;
@@ -65,15 +75,16 @@ export function createHistoryState(projectId: string): HistoryState {
   });
 }
 
-function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
-  if (value === null || typeof value !== "object" || seen.has(value)) {
+function deepFreeze<T>(value: T, seen = new TrustedWeakSet<object>()): T {
+  if (value === null || typeof value !== "object" || weakSetHas(seen, value)) {
     return value;
   }
-  seen.add(value);
-  for (const child of Object.values(value)) {
-    deepFreeze(child, seen);
+  weakSetAdd(seen, value);
+  const children = objectValues(value);
+  for (let index = 0; index < children.length; index += 1) {
+    deepFreeze(children[index], seen);
   }
-  return Object.freeze(value);
+  return objectFreeze(value);
 }
 
 function detachHistoryState(state: HistoryState): HistoryState {

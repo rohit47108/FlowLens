@@ -31,6 +31,24 @@ function firstMutablePath(value: unknown, path = "$"): string | null {
   return null;
 }
 
+function canonicalJson(value: unknown): string {
+  const normalize = (candidate: unknown): unknown => {
+    if (Array.isArray(candidate)) return candidate.map(normalize);
+    if (candidate !== null && typeof candidate === "object") {
+      return Object.fromEntries(
+        Object.keys(candidate)
+          .sort()
+          .map((key) => [
+            key,
+            normalize((candidate as Record<string, unknown>)[key]),
+          ]),
+      );
+    }
+    return candidate;
+  };
+  return JSON.stringify(normalize(value));
+}
+
 function setAtPath(
   target: object,
   path: readonly (string | number)[],
@@ -383,6 +401,117 @@ describe("dispatchProjectCommand", () => {
     expect(replay.replayed).toBe(true);
     expect(firstMutablePath(replay)).toBeNull();
     expect(firstMutablePath(replay.idempotencyRecord)).toBeNull();
+  });
+
+  it("retains record authority when WeakSet prototypes are replaced after initialization", () => {
+    const project = projectFixture();
+    const command = {
+      type: "RENAME_PROJECT" as const,
+      ...envelope(project, {
+        commandId: "command-poisoned-weak-set",
+        idempotencyKey: "idempotency-poisoned-weak-set",
+      }),
+      name: "Prototype-safe replay",
+    };
+    const first = dispatchProjectCommand(project, command, context());
+    if (!first.ok) throw new Error("Expected authority setup to succeed");
+
+    const forgedRecord = structuredClone(
+      first.idempotencyRecord,
+    ) as unknown as {
+      committedFingerprint: string;
+      committed: {
+        project: {
+          rooms: Array<{ entities: Array<{ label: string }> }>;
+        };
+      };
+    };
+    forgedRecord.committed.project.rooms[0]!.entities[0]!.label =
+      "Tampered through prototype poisoning";
+    forgedRecord.committedFingerprint = canonicalJson(forgedRecord.committed);
+
+    const hasDescriptor = Object.getOwnPropertyDescriptor(
+      WeakSet.prototype,
+      "has",
+    );
+    const addDescriptor = Object.getOwnPropertyDescriptor(
+      WeakSet.prototype,
+      "add",
+    );
+    if (hasDescriptor === undefined || addDescriptor === undefined) {
+      throw new Error("Expected WeakSet prototype descriptors");
+    }
+
+    let later: ReturnType<typeof dispatchProjectCommand> | undefined;
+    try {
+      Object.defineProperty(WeakSet.prototype, "has", {
+        ...hasDescriptor,
+        value: () => true,
+      });
+      Object.defineProperty(WeakSet.prototype, "add", {
+        ...addDescriptor,
+        value(this: WeakSet<object>) {
+          return this;
+        },
+      });
+
+      expect(
+        dispatchProjectCommand(
+          first.project,
+          command,
+          context([forgedRecord as unknown as IdempotencyRecord]),
+        ),
+      ).toMatchObject({
+        ok: false,
+        error: { code: "IDEMPOTENCY_CONFLICT" },
+      });
+
+      const replay = dispatchProjectCommand(
+        first.project,
+        command,
+        context([first.idempotencyRecord]),
+      );
+      if (!replay.ok) throw new Error("Expected genuine replay to succeed");
+      expect(replay.replayed).toBe(true);
+      expect(firstMutablePath(replay)).toBeNull();
+
+      later = dispatchProjectCommand(
+        first.project,
+        {
+          type: "RENAME_PROJECT",
+          ...envelope(first.project, {
+            commandId: "command-poisoned-weak-set-later",
+            idempotencyKey: "idempotency-poisoned-weak-set-later",
+            nextProjectRevision: "revision-project-poisoned-weak-set-later",
+          }),
+          name: "Created while prototypes were poisoned",
+        },
+        context([first.idempotencyRecord]),
+      );
+      if (!later.ok) throw new Error("Expected later rename to succeed");
+      expect(firstMutablePath(later)).toBeNull();
+    } finally {
+      Object.defineProperty(WeakSet.prototype, "has", hasDescriptor);
+      Object.defineProperty(WeakSet.prototype, "add", addDescriptor);
+    }
+
+    if (later === undefined || !later.ok) {
+      throw new Error("Expected a committed record from the poisoned realm");
+    }
+    const laterReplay = dispatchProjectCommand(
+      later.project,
+      {
+        type: "RENAME_PROJECT",
+        ...envelope(first.project, {
+          commandId: "command-poisoned-weak-set-later",
+          idempotencyKey: "idempotency-poisoned-weak-set-later",
+          nextProjectRevision: "revision-project-poisoned-weak-set-later",
+        }),
+        name: "Created while prototypes were poisoned",
+      },
+      context([first.idempotencyRecord, later.idempotencyRecord]),
+    );
+    expect(laterReplay).toMatchObject({ ok: true, replayed: true });
   });
 
   it("derives revision uniqueness from committed records when hint arrays are empty", () => {

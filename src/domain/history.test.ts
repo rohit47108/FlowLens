@@ -82,6 +82,18 @@ function historyRequest(
   };
 }
 
+function projectHistoryRequest(project: Project, suffix: string) {
+  return {
+    commandId: `command-${suffix}`,
+    idempotencyKey: `idempotency-${suffix}`,
+    occurredAtUtc: "2026-08-25T13:01:00.000Z",
+    causalParentRevisionId: project.revisionId,
+    expectedProjectRevisionId: project.revisionId,
+    nextProjectRevision: `revision-project-${suffix}`,
+    leaseFence: 7,
+  };
+}
+
 function semanticProject(project: Project) {
   return {
     ...project,
@@ -177,14 +189,23 @@ describe("command history", () => {
     );
     if (!created.ok) throw new Error("Expected room creation to succeed");
 
-    const undoRequest = historyRequest(
+    const invalidUndoRequest = historyRequest(
       created.project,
-      "undo-room",
+      "undo-room-extra-room-revision",
       "revision-room-unused",
     );
+    const history = appendHistory(
+      createHistoryState(initial.projectId),
+      created,
+    );
+    expect(
+      undo(created.project, history, invalidUndoRequest, contextWith(created)),
+    ).toMatchObject({ ok: false, error: { code: "INVALID_COMMAND" } });
+
+    const undoRequest = projectHistoryRequest(created.project, "undo-room");
     const undone = undo(
       created.project,
-      appendHistory(createHistoryState(initial.projectId), created),
+      history,
       undoRequest,
       contextWith(created),
     );
@@ -1766,11 +1787,7 @@ describe("command history", () => {
     const result = undo(
       onlyRoomProject.value,
       appendHistory(createHistoryState(initial.projectId), created),
-      historyRequest(
-        onlyRoomProject.value,
-        "last-room",
-        "revision-room-unused",
-      ),
+      projectHistoryRequest(onlyRoomProject.value, "last-room"),
       contextWith(created),
     );
     expect(result).toMatchObject({

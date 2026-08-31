@@ -29,7 +29,16 @@ import type {
 const MAX_COLLECTION_LENGTH = 256;
 const MAX_HISTORY_RECORDS = 4096;
 const REJECTION_MESSAGE = "Command was rejected.";
-const trustedIdempotencyRecords = new WeakSet<object>();
+const TrustedWeakSet = WeakSet;
+const objectFreeze = Object.freeze;
+const objectValues = Object.values;
+const weakSetHas = Function.prototype.call.bind(
+  TrustedWeakSet.prototype.has,
+) as (set: WeakSet<object>, value: object) => boolean;
+const weakSetAdd = Function.prototype.call.bind(
+  TrustedWeakSet.prototype.add,
+) as (set: WeakSet<object>, value: object) => WeakSet<object>;
+const trustedIdempotencyRecords = new TrustedWeakSet<object>();
 
 export type CommandErrorCode =
   | "INVALID_COMMAND"
@@ -213,15 +222,16 @@ function assertNever(value: never): never {
   throw new Error(`Unhandled command variant: ${String(value)}`);
 }
 
-function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
-  if (value === null || typeof value !== "object" || seen.has(value)) {
+function deepFreeze<T>(value: T, seen = new TrustedWeakSet<object>()): T {
+  if (value === null || typeof value !== "object" || weakSetHas(seen, value)) {
     return value;
   }
-  seen.add(value);
-  for (const child of Object.values(value)) {
-    deepFreeze(child, seen);
+  weakSetAdd(seen, value);
+  const children = objectValues(value);
+  for (let index = 0; index < children.length; index += 1) {
+    deepFreeze(children[index], seen);
   }
-  return Object.freeze(value);
+  return objectFreeze(value);
 }
 
 function canonicalize(value: unknown): CanonicalCommandValue {
@@ -1139,7 +1149,7 @@ function idempotencyRecordMatchesCommand(
 ): boolean {
   try {
     if (
-      !trustedIdempotencyRecords.has(record) ||
+      !weakSetHas(trustedIdempotencyRecords, record) ||
       record.projectId !== command.projectId ||
       record.idempotencyKey !== command.idempotencyKey ||
       record.commandFingerprint !== fingerprint ||
@@ -1201,9 +1211,16 @@ function historyExecutionMatches(
 }
 
 function contextRecordsAreTrusted(context: DispatchContext): boolean {
-  return context.idempotencyRecords.every((record) =>
-    trustedIdempotencyRecords.has(record),
-  );
+  for (let index = 0; index < context.idempotencyRecords.length; index += 1) {
+    const record = context.idempotencyRecords[index];
+    if (
+      record === undefined ||
+      !weakSetHas(trustedIdempotencyRecords, record)
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function dispatchValidated(
@@ -1299,7 +1316,7 @@ function dispatchValidated(
       historyExecution === null ? null : Object.freeze({ ...historyExecution }),
     committed,
   });
-  trustedIdempotencyRecords.add(idempotencyRecord);
+  weakSetAdd(trustedIdempotencyRecords, idempotencyRecord);
   return deepFreeze({
     ok: true,
     replayed: false,
@@ -1822,10 +1839,10 @@ function historyCommandRequiresNextRoomRevision(
     case "SET_ENTITY_LOCK":
     case "DUPLICATE_ENTITY":
     case "DELETE_ENTITY":
-    case "DELETE_ROOM":
     case "REMOVE_ADDED_ENTITY":
     case "RESTORE_DELETED_ENTITY":
       return true;
+    case "DELETE_ROOM":
     case "RENAME_PROJECT":
       return false;
     default:
