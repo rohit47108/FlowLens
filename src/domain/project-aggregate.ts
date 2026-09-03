@@ -29,9 +29,28 @@ import type {
 const MAX_COLLECTION_LENGTH = 256;
 const MAX_HISTORY_RECORDS = 4096;
 const REJECTION_MESSAGE = "Command was rejected.";
+const TrustedMap = Map;
+const TrustedSet = Set;
 const TrustedWeakSet = WeakSet;
 const objectFreeze = Object.freeze;
 const objectValues = Object.values;
+const mapGet = Function.prototype.call.bind(TrustedMap.prototype.get) as <K, V>(
+  map: Map<K, V>,
+  key: K,
+) => V | undefined;
+const mapSet = Function.prototype.call.bind(TrustedMap.prototype.set) as <K, V>(
+  map: Map<K, V>,
+  key: K,
+  value: V,
+) => Map<K, V>;
+const setHas = Function.prototype.call.bind(TrustedSet.prototype.has) as <T>(
+  set: Set<T>,
+  value: T,
+) => boolean;
+const setAdd = Function.prototype.call.bind(TrustedSet.prototype.add) as <T>(
+  set: Set<T>,
+  value: T,
+) => Set<T>;
 const weakSetHas = Function.prototype.call.bind(
   TrustedWeakSet.prototype.has,
 ) as (set: WeakSet<object>, value: object) => boolean;
@@ -285,14 +304,14 @@ function commandFingerprint(value: CanonicalCommandValue): string {
 }
 
 function duplicateStateError(project: Project): CommandErrorCode | null {
-  const roomIds = new Set<string>();
-  const entityIds = new Set<string>();
+  const roomIds = new TrustedSet<string>();
+  const entityIds = new TrustedSet<string>();
   for (const room of project.rooms) {
-    if (roomIds.has(room.roomId)) return "AMBIGUOUS_ROOM";
-    roomIds.add(room.roomId);
+    if (setHas(roomIds, room.roomId)) return "AMBIGUOUS_ROOM";
+    setAdd(roomIds, room.roomId);
     for (const entity of room.entities) {
-      if (entityIds.has(entity.entityId)) return "AMBIGUOUS_ENTITY";
-      entityIds.add(entity.entityId);
+      if (setHas(entityIds, entity.entityId)) return "AMBIGUOUS_ENTITY";
+      setAdd(entityIds, entity.entityId);
     }
   }
   return null;
@@ -449,11 +468,13 @@ function preconditionError(
 }
 
 function entityIds(project: Project): Set<string> {
-  return new Set(
-    project.rooms.flatMap((room) =>
-      room.entities.map((entity) => entity.entityId),
-    ),
-  );
+  const ids = new TrustedSet<string>();
+  for (const room of project.rooms) {
+    for (const entity of room.entities) {
+      setAdd(ids, entity.entityId);
+    }
+  }
+  return ids;
 }
 
 function valuesEqual(left: unknown, right: unknown): boolean {
@@ -473,12 +494,15 @@ function operationError(
       if (project.rooms.some((room) => room.roomId === command.room.roomId)) {
         return "DUPLICATE_ID";
       }
-      const newIds = new Set<string>();
+      const newIds = new TrustedSet<string>();
       for (const entity of command.room.entities) {
-        if (allEntityIds.has(entity.entityId) || newIds.has(entity.entityId)) {
+        if (
+          setHas(allEntityIds, entity.entityId) ||
+          setHas(newIds, entity.entityId)
+        ) {
           return "DUPLICATE_ID";
         }
-        newIds.add(entity.entityId);
+        setAdd(newIds, entity.entityId);
       }
       return null;
     }
@@ -489,7 +513,9 @@ function operationError(
       if (room.entities.length >= MAX_COLLECTION_LENGTH) {
         return "CAPACITY_EXCEEDED";
       }
-      return allEntityIds.has(command.entity.entityId) ? "DUPLICATE_ID" : null;
+      return setHas(allEntityIds, command.entity.entityId)
+        ? "DUPLICATE_ID"
+        : null;
     }
     case "MOVE_ENTITY":
     case "RESIZE_ENTITY":
@@ -541,7 +567,9 @@ function operationError(
           if (room.entities.length >= MAX_COLLECTION_LENGTH) {
             return "CAPACITY_EXCEEDED";
           }
-          return allEntityIds.has(command.newEntityId) ? "DUPLICATE_ID" : null;
+          return setHas(allEntityIds, command.newEntityId)
+            ? "DUPLICATE_ID"
+            : null;
         case "DELETE_ENTITY":
           return null;
         default:
@@ -562,7 +590,9 @@ function operationError(
       if (command.insertionIndex > room.entities.length) {
         return "INVALID_COMMAND";
       }
-      return allEntityIds.has(command.entity.entityId) ? "DUPLICATE_ID" : null;
+      return setHas(allEntityIds, command.entity.entityId)
+        ? "DUPLICATE_ID"
+        : null;
     }
     case "DELETE_ROOM":
       return project.rooms.length === 1 ? "LAST_ROOM_REQUIRED" : null;
@@ -1581,32 +1611,32 @@ function historyStateIsBound(
   ) {
     return false;
   }
-  const entryIds = new Set<string>();
-  const commandIds = new Set<string>();
-  const commandKeys = new Set<string>();
+  const entryIds = new TrustedSet<string>();
+  const commandIds = new TrustedSet<string>();
+  const commandKeys = new TrustedSet<string>();
   for (const entry of entries) {
     if (
       entry.forwardCommand.projectId !== projectId ||
       !historyEntryIsConsistent(entry) ||
-      entryIds.has(entry.historyEntryId) ||
-      commandIds.has(entry.forwardCommand.commandId) ||
-      commandKeys.has(entry.forwardCommand.idempotencyKey)
+      setHas(entryIds, entry.historyEntryId) ||
+      setHas(commandIds, entry.forwardCommand.commandId) ||
+      setHas(commandKeys, entry.forwardCommand.idempotencyKey)
     ) {
       return false;
     }
-    entryIds.add(entry.historyEntryId);
-    commandIds.add(entry.forwardCommand.commandId);
-    commandKeys.add(entry.forwardCommand.idempotencyKey);
+    setAdd(entryIds, entry.historyEntryId);
+    setAdd(commandIds, entry.forwardCommand.commandId);
+    setAdd(commandKeys, entry.forwardCommand.idempotencyKey);
   }
-  const receiptKeys = new Set<string>();
+  const receiptKeys = new TrustedSet<string>();
   for (const receipt of history.replayReceipts) {
     if (
-      !entryIds.has(receipt.historyEntryId) ||
-      receiptKeys.has(receipt.envelope.idempotencyKey)
+      !setHas(entryIds, receipt.historyEntryId) ||
+      setHas(receiptKeys, receipt.envelope.idempotencyKey)
     ) {
       return false;
     }
-    receiptKeys.add(receipt.envelope.idempotencyKey);
+    setAdd(receiptKeys, receipt.envelope.idempotencyKey);
   }
   return true;
 }
@@ -1671,17 +1701,18 @@ function historyReceiptsHaveCommittedProvenance(
   context: DispatchContext,
 ): boolean {
   try {
-    const recordsByKey = new Map<string, IdempotencyRecord | null>();
+    const recordsByKey = new TrustedMap<string, IdempotencyRecord | null>();
     for (const record of context.idempotencyRecords) {
       if (record.projectId !== history.projectId) continue;
-      const existing = recordsByKey.get(record.idempotencyKey);
-      recordsByKey.set(
+      const existing = mapGet(recordsByKey, record.idempotencyKey);
+      mapSet(
+        recordsByKey,
         record.idempotencyKey,
         existing === undefined ? record : null,
       );
     }
     return history.replayReceipts.every((receipt) => {
-      const record = recordsByKey.get(receipt.envelope.idempotencyKey);
+      const record = mapGet(recordsByKey, receipt.envelope.idempotencyKey);
       return (
         record !== undefined &&
         record !== null &&
@@ -1735,23 +1766,120 @@ function historyEntryHasCommittedProvenance(
   }
 }
 
+function historyStackHasCausalOrder(
+  history: HistoryState,
+  context: DispatchContext,
+): boolean {
+  const entryIds = new TrustedSet<string>();
+  for (const entry of [...history.past, ...history.future]) {
+    setAdd(entryIds, entry.historyEntryId);
+  }
+
+  const receiptsByKey = new TrustedMap<string, HistoryReplayReceipt | null>();
+  for (const receipt of history.replayReceipts) {
+    const existing = mapGet(receiptsByKey, receipt.envelope.idempotencyKey);
+    mapSet(
+      receiptsByKey,
+      receipt.envelope.idempotencyKey,
+      existing === undefined ? receipt : null,
+    );
+  }
+
+  const originalRecordsByEntryId = new TrustedMap<
+    string,
+    IdempotencyRecord | null
+  >();
+  const successors = new TrustedMap<string, string | null>();
+  for (const record of context.idempotencyRecords) {
+    if (record.projectId !== history.projectId) continue;
+    const historyExecution = record.historyExecution;
+    const originalEntryId = record.committed.historyEntry.historyEntryId;
+    const represented =
+      historyExecution === null
+        ? setHas(entryIds, originalEntryId)
+        : (() => {
+            const receipt = mapGet(receiptsByKey, record.idempotencyKey);
+            return (
+              receipt !== undefined &&
+              receipt !== null &&
+              receipt.direction === historyExecution.direction &&
+              receipt.historyEntryId === historyExecution.historyEntryId
+            );
+          })();
+    if (!represented) continue;
+
+    if (historyExecution === null) {
+      const existing = mapGet(originalRecordsByEntryId, originalEntryId);
+      mapSet(
+        originalRecordsByEntryId,
+        originalEntryId,
+        existing === undefined ? record : null,
+      );
+    }
+
+    const audit = record.committed.auditRecord;
+    const existingSuccessor = mapGet(successors, audit.priorProjectRevision);
+    mapSet(
+      successors,
+      audit.priorProjectRevision,
+      existingSuccessor === undefined
+        ? audit.newProjectRevision
+        : existingSuccessor === audit.newProjectRevision
+          ? existingSuccessor
+          : null,
+    );
+  }
+
+  const orderedApplicableEntries = [
+    ...history.past,
+    ...history.future.slice().reverse(),
+  ].filter((entry) => entry.applicability.status === "APPLICABLE");
+  const visitedRevisions = new TrustedSet<string>();
+  let cursorRevision: string | null = null;
+  for (const entry of orderedApplicableEntries) {
+    const record = mapGet(originalRecordsByEntryId, entry.historyEntryId);
+    if (record === undefined || record === null) return false;
+    const audit = record.committed.auditRecord;
+    if (
+      mapGet(successors, audit.priorProjectRevision) !==
+      audit.newProjectRevision
+    ) {
+      return false;
+    }
+    if (cursorRevision !== null) {
+      while (cursorRevision !== audit.priorProjectRevision) {
+        if (setHas(visitedRevisions, cursorRevision)) return false;
+        setAdd(visitedRevisions, cursorRevision);
+        const successor: string | null | undefined = mapGet(
+          successors,
+          cursorRevision,
+        );
+        if (successor === undefined || successor === null) return false;
+        cursorRevision = successor;
+      }
+    }
+    cursorRevision = audit.newProjectRevision;
+  }
+  return true;
+}
+
 function historyReplayFreshnessError(
   history: HistoryState,
   request: HistoryReplayEnvelope,
 ): CommandErrorCode | null {
-  const commandIds = new Set<string>();
-  const idempotencyKeys = new Set<string>();
-  const revisionIds = new Set<string>();
+  const commandIds = new TrustedSet<string>();
+  const idempotencyKeys = new TrustedSet<string>();
+  const revisionIds = new TrustedSet<string>();
   for (const entry of [...history.past, ...history.future]) {
     const command = entry.forwardCommand;
-    commandIds.add(command.commandId);
-    idempotencyKeys.add(command.idempotencyKey);
-    revisionIds.add(command.causalParentRevisionId);
-    revisionIds.add(command.expectedProjectRevisionId);
-    revisionIds.add(command.nextProjectRevision);
+    setAdd(commandIds, command.commandId);
+    setAdd(idempotencyKeys, command.idempotencyKey);
+    setAdd(revisionIds, command.causalParentRevisionId);
+    setAdd(revisionIds, command.expectedProjectRevisionId);
+    setAdd(revisionIds, command.nextProjectRevision);
     switch (command.type) {
       case "CREATE_ROOM":
-        revisionIds.add(command.room.revisionId);
+        setAdd(revisionIds, command.room.revisionId);
         break;
       case "RENAME_PROJECT":
         break;
@@ -1765,11 +1893,11 @@ function historyReplayFreshnessError(
       case "DELETE_ENTITY":
       case "REMOVE_ADDED_ENTITY":
       case "RESTORE_DELETED_ENTITY":
-        revisionIds.add(command.expectedRoomRevision);
-        revisionIds.add(command.nextRoomRevision);
+        setAdd(revisionIds, command.expectedRoomRevision);
+        setAdd(revisionIds, command.nextRoomRevision);
         break;
       case "DELETE_ROOM":
-        revisionIds.add(command.expectedRoomRevision);
+        setAdd(revisionIds, command.expectedRoomRevision);
         break;
       default:
         assertNever(command);
@@ -1777,23 +1905,23 @@ function historyReplayFreshnessError(
   }
   for (const receipt of history.replayReceipts) {
     const envelope = receipt.envelope;
-    commandIds.add(envelope.commandId);
-    idempotencyKeys.add(envelope.idempotencyKey);
-    revisionIds.add(envelope.causalParentRevisionId);
-    revisionIds.add(envelope.expectedProjectRevisionId);
-    revisionIds.add(envelope.nextProjectRevision);
+    setAdd(commandIds, envelope.commandId);
+    setAdd(idempotencyKeys, envelope.idempotencyKey);
+    setAdd(revisionIds, envelope.causalParentRevisionId);
+    setAdd(revisionIds, envelope.expectedProjectRevisionId);
+    setAdd(revisionIds, envelope.nextProjectRevision);
     if (envelope.nextRoomRevision !== undefined) {
-      revisionIds.add(envelope.nextRoomRevision);
+      setAdd(revisionIds, envelope.nextRoomRevision);
     }
   }
-  if (commandIds.has(request.commandId)) return "DUPLICATE_ID";
-  if (idempotencyKeys.has(request.idempotencyKey)) {
+  if (setHas(commandIds, request.commandId)) return "DUPLICATE_ID";
+  if (setHas(idempotencyKeys, request.idempotencyKey)) {
     return "IDEMPOTENCY_CONFLICT";
   }
   if (
-    revisionIds.has(request.nextProjectRevision) ||
+    setHas(revisionIds, request.nextProjectRevision) ||
     (request.nextRoomRevision !== undefined &&
-      (revisionIds.has(request.nextRoomRevision) ||
+      (setHas(revisionIds, request.nextRoomRevision) ||
         request.nextRoomRevision === request.nextProjectRevision))
   ) {
     return "REVISION_CONFLICT";
@@ -1997,6 +2125,9 @@ function executeHistory(
     });
   }
   if (!historyReceiptsHaveCommittedProvenance(currentHistory, context)) {
+    return historyFailure(simpleHistoryError("INVALID_HISTORY"));
+  }
+  if (!historyStackHasCausalOrder(currentHistory, context)) {
     return historyFailure(simpleHistoryError("INVALID_HISTORY"));
   }
 

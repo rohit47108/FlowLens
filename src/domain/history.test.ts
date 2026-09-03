@@ -1512,6 +1512,213 @@ describe("command history", () => {
         contextWith(forward),
       ),
     ).toMatchObject({ ok: false, error: { code: "INVALID_HISTORY" } });
+
+    const setHasDescriptor = Object.getOwnPropertyDescriptor(
+      Set.prototype,
+      "has",
+    );
+    const setAddDescriptor = Object.getOwnPropertyDescriptor(
+      Set.prototype,
+      "add",
+    );
+    if (setHasDescriptor === undefined || setAddDescriptor === undefined) {
+      throw new Error("Expected Set prototype descriptors");
+    }
+    const originalSetHas = setHasDescriptor.value as (
+      this: Set<unknown>,
+      value: unknown,
+    ) => boolean;
+    const originalSetAdd = setAddDescriptor.value as (
+      this: Set<unknown>,
+      value: unknown,
+    ) => Set<unknown>;
+    const isHistoryIdentity = (value: unknown) =>
+      typeof value === "string" &&
+      (value.startsWith("command-") || value.startsWith("idempotency-"));
+    try {
+      Object.defineProperty(Set.prototype, "has", {
+        ...setHasDescriptor,
+        value(this: Set<unknown>, value: unknown) {
+          return isHistoryIdentity(value)
+            ? false
+            : originalSetHas.call(this, value);
+        },
+      });
+      Object.defineProperty(Set.prototype, "add", {
+        ...setAddDescriptor,
+        value(this: Set<unknown>, value: unknown) {
+          return isHistoryIdentity(value)
+            ? this
+            : originalSetAdd.call(this, value);
+        },
+      });
+      expect(
+        undo(
+          forward.project,
+          duplicatedEntry,
+          historyRequest(
+            forward.project,
+            "duplicated-entry-poisoned-set",
+            "revision-room-duplicated-entry-poisoned-set",
+          ),
+          contextWith(forward),
+        ),
+      ).toMatchObject({ ok: false, error: { code: "INVALID_HISTORY" } });
+    } finally {
+      Object.defineProperty(Set.prototype, "has", setHasDescriptor);
+      Object.defineProperty(Set.prototype, "add", setAddDescriptor);
+    }
+  });
+
+  it("rejects reordered genuine entries that break the causal history stack", () => {
+    const initial = projectFixture();
+    const first = dispatchProjectCommand(
+      initial,
+      {
+        type: "RENAME_PROJECT",
+        commandId: "command-causal-order-first",
+        idempotencyKey: "idempotency-causal-order-first",
+        projectId: initial.projectId,
+        occurredAtUtc: "2026-08-25T16:55:00.000Z",
+        causalParentRevisionId: initial.revisionId,
+        expectedProjectRevisionId: initial.revisionId,
+        nextProjectRevision: "revision-project-causal-order-first",
+        leaseFence: 7,
+        name: "Causal order first",
+      },
+      dispatchContext,
+    );
+    if (!first.ok) throw new Error("Expected first rename to succeed");
+    const second = dispatchProjectCommand(
+      first.project,
+      {
+        type: "RENAME_PROJECT",
+        commandId: "command-causal-order-second",
+        idempotencyKey: "idempotency-causal-order-second",
+        projectId: initial.projectId,
+        occurredAtUtc: "2026-08-25T16:56:00.000Z",
+        causalParentRevisionId: first.project.revisionId,
+        expectedProjectRevisionId: first.project.revisionId,
+        nextProjectRevision: "revision-project-causal-order-second",
+        leaseFence: 7,
+        name: "Causal order second",
+      },
+      contextWith(first),
+    );
+    if (!second.ok) throw new Error("Expected second rename to succeed");
+    const history = appendHistory(
+      appendHistory(createHistoryState(initial.projectId), first),
+      second,
+    );
+    const reordered = {
+      ...structuredClone(history),
+      past: [
+        structuredClone(history.past[1]!),
+        structuredClone(history.past[0]!),
+      ],
+    } as HistoryState;
+
+    expect(
+      undo(
+        second.project,
+        reordered,
+        projectHistoryRequest(second.project, "causal-order-reordered"),
+        contextWith(first, second),
+      ),
+    ).toMatchObject({ ok: false, error: { code: "INVALID_HISTORY" } });
+
+    const legitimatelyUndone = undo(
+      second.project,
+      history,
+      projectHistoryRequest(second.project, "causal-order-legitimate-undo"),
+      contextWith(first, second),
+    );
+    if (!legitimatelyUndone.ok) {
+      throw new Error("Expected legitimate second rename undo to succeed");
+    }
+    const reorderedAfterReceipt = {
+      ...structuredClone(legitimatelyUndone.history),
+      past: [structuredClone(history.past[1]!)],
+      future: [structuredClone(history.past[0]!)],
+    } as HistoryState;
+    expect(
+      undo(
+        legitimatelyUndone.project,
+        reorderedAfterReceipt,
+        projectHistoryRequest(
+          legitimatelyUndone.project,
+          "causal-order-reordered-after-receipt",
+        ),
+        contextWith(first, second, legitimatelyUndone.commandResult),
+      ),
+    ).toMatchObject({ ok: false, error: { code: "INVALID_HISTORY" } });
+  });
+
+  it("retains receipt provenance when Map prototypes are replaced after initialization", () => {
+    const initial = projectFixture();
+    const forward = forwardMove(initial);
+    const request = historyRequest(
+      forward.project,
+      "map-prototype-retry",
+      "revision-room-map-prototype-retry",
+    );
+    const undone = undo(
+      forward.project,
+      appendHistory(createHistoryState(initial.projectId), forward),
+      request,
+      contextWith(forward),
+    );
+    if (!undone.ok) throw new Error("Expected undo setup to succeed");
+
+    const getDescriptor = Object.getOwnPropertyDescriptor(Map.prototype, "get");
+    const setDescriptor = Object.getOwnPropertyDescriptor(Map.prototype, "set");
+    if (getDescriptor === undefined || setDescriptor === undefined) {
+      throw new Error("Expected Map prototype descriptors");
+    }
+    const originalMapGet = getDescriptor.value as (
+      this: Map<unknown, unknown>,
+      key: unknown,
+    ) => unknown;
+    const originalMapSet = setDescriptor.value as (
+      this: Map<unknown, unknown>,
+      key: unknown,
+      value: unknown,
+    ) => Map<unknown, unknown>;
+    const isHistoryKey = (key: unknown) =>
+      typeof key === "string" && key.startsWith("idempotency-");
+    try {
+      Object.defineProperty(Map.prototype, "get", {
+        ...getDescriptor,
+        value(this: Map<unknown, unknown>, key: unknown) {
+          return isHistoryKey(key) ? undefined : originalMapGet.call(this, key);
+        },
+      });
+      Object.defineProperty(Map.prototype, "set", {
+        ...setDescriptor,
+        value(this: Map<unknown, unknown>, key: unknown, value: unknown) {
+          return isHistoryKey(key)
+            ? this
+            : originalMapSet.call(this, key, value);
+        },
+      });
+      const retried = undo(
+        undone.project,
+        undone.history,
+        request,
+        contextWith(forward, undone.commandResult),
+      );
+      if (!retried.ok) {
+        throw new Error(
+          `Expected exact retry to authenticate, received ${retried.error.code}`,
+        );
+      }
+      expect(retried.commandResult.replayed).toBe(true);
+      expect(retried.project).toEqual(undone.project);
+      expect(retried.history).toEqual(undone.history);
+    } finally {
+      Object.defineProperty(Map.prototype, "get", getDescriptor);
+      Object.defineProperty(Map.prototype, "set", setDescriptor);
+    }
   });
 
   it("rejects an authentic applicable history head paired with a later project", () => {
