@@ -1654,6 +1654,100 @@ describe("command history", () => {
     ).toMatchObject({ ok: false, error: { code: "INVALID_HISTORY" } });
   });
 
+  it.each([
+    ["UNDO", false, false],
+    ["REDO", false, false],
+    ["UNDO", true, false],
+    ["REDO", true, false],
+    ["UNDO", false, true],
+  ] as const)(
+    "rejects a forged past/future partition for %s after genuine undo: %s with invalidation: %s",
+    (direction, afterUndo, invalidateMovedEntry) => {
+      const initial = projectFixture();
+      const first = dispatchProjectCommand(
+        initial,
+        {
+          ...projectHistoryRequest(initial, "partition-first"),
+          type: "RENAME_PROJECT",
+          projectId: initial.projectId,
+          name: "Partition first",
+        },
+        dispatchContext,
+      );
+      if (!first.ok) throw new Error("Expected first rename to succeed");
+      const second = dispatchProjectCommand(
+        first.project,
+        {
+          ...projectHistoryRequest(first.project, "partition-second"),
+          type: "RENAME_PROJECT",
+          projectId: initial.projectId,
+          name: "Partition second",
+        },
+        contextWith(first),
+      );
+      if (!second.ok) throw new Error("Expected second rename to succeed");
+      const originalHistory = appendHistory(
+        appendHistory(createHistoryState(initial.projectId), first),
+        second,
+      );
+      let project = second.project;
+      let history = originalHistory;
+      const committed = [first, second];
+      if (afterUndo) {
+        for (const suffix of [
+          "partition-undo-second",
+          "partition-undo-first",
+        ]) {
+          const undone = undo(
+            project,
+            history,
+            projectHistoryRequest(project, suffix),
+            contextWith(...committed),
+          );
+          if (!undone.ok) throw new Error("Expected genuine undo to succeed");
+          project = undone.project;
+          history = undone.history;
+          committed.push(undone.commandResult);
+        }
+        expect(semanticProject(project)).toEqual(semanticProject(initial));
+      }
+      const forged: HistoryState = {
+        ...history,
+        past: [originalHistory.past[0]!],
+        future: [
+          invalidateMovedEntry
+            ? {
+                ...originalHistory.past[1]!,
+                applicability: {
+                  status: "NON_APPLICABLE",
+                  reason: "REMOTE_EDIT",
+                },
+              }
+            : originalHistory.past[1]!,
+        ],
+      };
+      const beforeProject = structuredClone(project);
+      const beforeHistory = structuredClone(forged);
+      const execute = direction === "UNDO" ? undo : redo;
+      expect(
+        execute(
+          project,
+          forged,
+          projectHistoryRequest(project, "partition-forged"),
+          contextWith(...committed),
+        ),
+      ).toEqual({
+        ok: false,
+        error: {
+          code: "INVALID_HISTORY",
+          message: "History action was rejected.",
+        },
+      });
+      expect(project).toEqual(beforeProject);
+      expect(forged).toEqual(beforeHistory);
+    },
+  );
+
   it("retains receipt provenance when Map prototypes are replaced after initialization", () => {
     const initial = projectFixture();
     const forward = forwardMove(initial);

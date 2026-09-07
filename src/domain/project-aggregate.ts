@@ -1790,6 +1790,10 @@ function historyStackHasCausalOrder(
     IdempotencyRecord | null
   >();
   const successors = new TrustedMap<string, string | null>();
+  const transitionsByRevision = new TrustedMap<
+    string,
+    IdempotencyRecord | null
+  >();
   for (const record of context.idempotencyRecords) {
     if (record.projectId !== history.projectId) continue;
     const historyExecution = record.historyExecution;
@@ -1818,6 +1822,13 @@ function historyStackHasCausalOrder(
     }
 
     const audit = record.committed.auditRecord;
+    mapSet(
+      transitionsByRevision,
+      audit.newProjectRevision,
+      mapGet(transitionsByRevision, audit.newProjectRevision) === undefined
+        ? record
+        : null,
+    );
     const existingSuccessor = mapGet(successors, audit.priorProjectRevision);
     mapSet(
       successors,
@@ -1859,6 +1870,46 @@ function historyStackHasCausalOrder(
       }
     }
     cursorRevision = audit.newProjectRevision;
+  }
+
+  // Relative order alone cannot establish whether an entry has been undone.
+  // Its latest committed transition on the head's ancestry determines its side.
+  const entrySides = new TrustedMap<string, "PAST" | "FUTURE">();
+  for (const entry of history.past) {
+    mapSet(entrySides, entry.historyEntryId, "PAST");
+  }
+  for (const entry of history.future) {
+    mapSet(entrySides, entry.historyEntryId, "FUTURE");
+  }
+  const checkedEntries = new TrustedSet<string>();
+  const ancestryRevisions = new TrustedSet<string>();
+  let remainingOriginals = history.past.length + history.future.length;
+  cursorRevision = history.headProjectRevisionId;
+  while (remainingOriginals > 0) {
+    if (cursorRevision === null || setHas(ancestryRevisions, cursorRevision)) {
+      return false;
+    }
+    setAdd(ancestryRevisions, cursorRevision);
+    const transition: IdempotencyRecord | null | undefined = mapGet(
+      transitionsByRevision,
+      cursorRevision,
+    );
+    if (transition === undefined || transition === null) return false;
+    const execution = transition.historyExecution;
+    const entryId =
+      execution?.historyEntryId ??
+      transition.committed.historyEntry.historyEntryId;
+    const side = mapGet(entrySides, entryId);
+    if (side !== undefined) {
+      if (!setHas(checkedEntries, entryId)) {
+        const committedSide =
+          execution?.direction === "UNDO" ? "FUTURE" : "PAST";
+        if (side !== committedSide) return false;
+        setAdd(checkedEntries, entryId);
+      }
+      if (execution === null) remainingOriginals -= 1;
+    }
+    cursorRevision = transition.committed.auditRecord.priorProjectRevision;
   }
   return true;
 }
