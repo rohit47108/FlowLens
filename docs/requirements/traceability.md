@@ -1,6 +1,6 @@
 # Requirement-to-evidence matrix
 
-Last updated: 2026-08-24
+Last updated: 2026-09-07
 
 Status meanings:
 
@@ -57,6 +57,6 @@ No requirement is promoted from `Planned` or `Implemented` based on source inspe
 
 | Phase | Current evidence | Remaining gate |
 | --- | --- | --- |
-| 0 | Repository inventory, current source register, accepted spec, ADRs, risk register, this matrix | Commit/push phase artifacts; foundation plan self-review |
-| 1 | Design contracts only | Red-green-refactor foundation implementation and invariant suite |
-| 2-15 | No implementation evidence yet | Corresponding plan, behavior, automated checks, and browser/manual proof |
+| 0 | Committed reconnaissance, source register, accepted spec, ADRs, risk register and Phase 0 verification report | Complete; later sources and requirement evidence stay live |
+| 1 | Locked toolchain; branded units/coordinates; strict project/provenance schemas; reviewed revisioned command/history implementation; full local check passed 179 tests at `8d3f684` | Shared constraints are in development. Canonical run identity, persistence, migrations, jobs and scientific contracts remain to implement. This domain evidence does not prove the editor or save/reopen workflow. |
+| 2-15 | Foundational accessible shell only; no complete product workflow yet | Corresponding plan, behavior, automated checks, and browser/manual proof |

@@ -1,6 +1,6 @@
 # Skill activation ledger
 
-Last updated: 2026-08-24
+Last updated: 2026-09-07
 
 This ledger maps the requested skills to the phase where their instructions govern work. `Activated` means the skill file was read and its workflow materially applied; it does not mean the corresponding product phase is complete.
 
@@ -26,10 +26,10 @@ This ledger maps the requested skills to the phase where their instructions gove
 | computer-vision-opencv | 0 architecture and Phase 6 implementation | Activated for architecture | Staged OpenCV.js capability, apparent-motion boundary, fixtures, memory cleanup. |
 | playwright-core | 2 onward; primary in 13-15 | Scheduled | Stable locator/actionability patterns for integrated browser workflows. |
 | browser:control-in-app-browser | 2 onward; primary in 12-15 | Scheduled | Inspect the running app, console, network, focus, responsive and recovery states. |
-| code-review-and-quality | Every checkpoint; primary in 13-15 | Scheduled | Multi-axis review of diffs, tests, architecture, security, performance, and maintainability. |
+| code-review-and-quality | Every checkpoint; primary in 13-15 | Activated for foundation checkpoints | Scoped independent specification/quality reviews identified and regression-tested parser, command-replay, and history defects. Full-product release review remains pending. |
 | impeccable | 12 and 15 | Scheduled | Final interface craft pass after full workflows exist. |
 | web-quality-audit | 13 and 15 | Scheduled | Accessibility, performance, security, SEO-applicability, and best-practice audit. |
-| performance-optimization | 14 | Scheduled | Profile first, optimize measured bottlenecks, enforce regression budgets. |
+| performance-optimization | Foundation hot paths; primary in 14 | Activated for baseline measurement | A partial synthetic causal-helper baseline was captured; the interrupted run is not a performance pass. Complete undo/persistence/UI profiling and Phase 14 regression budgets remain pending. |
 | observability-and-instrumentation | 2 foundation, primary in 14 | Scheduled | Privacy-safe product/job diagnostics and performance marks. |
 | shipping-and-launch | 15 | Scheduled | Release readiness, honest limitations, version/changelog and rollback posture. |
 | ci-cd-and-automation | 1 foundation, primary in 13-15 | Scheduled | Reproducible GitHub checks, artifacts, security and performance gates. |

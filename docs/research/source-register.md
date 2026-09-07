@@ -1,6 +1,6 @@
 # FlowLens source register
 
-Last verified: 2026-08-25
+Foundation sources verified: 2026-08-25. Placement and deterministic-computation references below were checked on 2026-09-04.
 
 This register records the primary sources used for framework, browser, scientific-computing, and accessibility decisions. Sources inform implementation; they do not override the FlowLens specification or safety boundaries.
 
@@ -22,6 +22,14 @@ This register records the primary sources used for framework, browser, scientifi
 | Fail closed when supported-realm prototypes drift after parser initialization | [OWASP: Prototype Pollution Prevention](https://cheatsheetseries.owasp.org/cheatsheets/Prototype_Pollution_Prevention_Cheat_Sheet.html), [OWASP testing guidance](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/22-Testing_for_Prototype_Pollution), and [MDN: `Reflect.ownKeys()`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Reflect/ownKeys) | OWASP describes inherited prototype state as a cross-object security hazard and recommends null-prototype data structures where objects are required. `Reflect.ownKeys()` covers every own string and symbol key. FlowLens snapshots exact Object/Array prototype descriptors in an initially trusted realm and rejects later drift before schema output construction. |
 | Use React Router in declarative mode | [React Router: Picking a Mode](https://reactrouter.com/start/modes) | Declarative mode provides URL matching and navigation without imposing loaders, server rendering, or a server runtime. |
 | Keep Three.js behind a React scene adapter | [React Three Fiber: Introduction](https://r3f.docs.pmnd.rs/getting-started/introduction) and [Your First Scene](https://r3f.docs.pmnd.rs/getting-started/your-first-scene) | React Three Fiber 9 pairs with React 19 and exposes Three.js objects through a React renderer. The domain remains authoritative; the scene is only a projection. |
+
+## Placement and deterministic computation
+
+| Decision | Primary source | Evidence used |
+| --- | --- | --- |
+| Project transformed editable boxes into conservative world bounds | [Three.js Box3](https://threejs.org/docs/pages/Box3.html) and [Matrix4](https://threejs.org/docs/pages/Matrix4.html) | Box3 exposes world-axis-aligned bounds and notes that enclosing boxes can exceed the underlying geometry. Matrix4 composes position, quaternion and scale. FlowLens's bottom-centre anchor, contact policy and pure domain implementation are separate decisions recorded in ADR-0008. |
+| Hash normalized immutable input bytes with SHA-256 | [MDN: SubtleCrypto.digest](https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/digest) | Web Crypto accepts byte buffers and returns a digest asynchronously; secure contexts and workers are supported. Hashes identify content, not its authenticity. Canonicalization is a separate versioned FlowLens policy. |
+| Use a versioned deterministic PRNG for reproducible search | [Blackman and Vigna: xoshiro128** reference](https://prng.di.unimi.it/xoshiro128starstar.c) | The authors' reference specifies four non-all-zero 32-bit state words, unsigned operations, and the version 1.1 scrambler based on state word 1. It is not a source of security tokens or nondeterministic identities. |
 
 ## Local persistence and background work
 

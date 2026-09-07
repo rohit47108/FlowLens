@@ -14,7 +14,7 @@ The detailed acceptance and verification steps for the active phase live under `
 ## Phase 1: Canonical foundation
 
 - [x] Install and lock the strict TypeScript application/test toolchain.
-- [ ] Implement validated IDs, SI units, coordinates, entities, claims, and projects.
+- [x] Implement validated IDs, SI units, coordinates, entities, claims, and projects.
 - [ ] Implement idempotent authoritative commands, inverse history, causal revisions, lease fencing, and constraints.
 - [ ] Implement canonical serialization, versioned seeded randomness, immutable run snapshots, and stale-result rules.
 - [ ] Implement claim resolution, confidence propagation, source integrity, invalidation, central admissibility, backend, recommendation, and experiment contracts.
