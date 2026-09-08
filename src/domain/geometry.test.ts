@@ -45,6 +45,27 @@ describe("boundsForEntity", () => {
     expect(bounds.max.z).toBeCloseTo(13, 12);
     expect(entity).toEqual(original);
   });
+
+  it("identifies overflow from finite transformed dimensions", () => {
+    const entity = genericEntity(
+      makeTransform({
+        position: vec3(0, 0, 0),
+        rotation: makeQuaternion(0, 0, 0, 1),
+        scale: vec3(1, 2, 1),
+      }),
+    );
+    const hugeEntity = {
+      ...entity,
+      dimensions: {
+        ...entity.dimensions,
+        yMetres: metres(1e308),
+      },
+    } as SpatialEntity;
+
+    expect(() => boundsForEntity(hugeEntity)).toThrowError(
+      "NON_FINITE_GEOMETRY",
+    );
+  });
 });
 
 describe("inverseTransformPoint", () => {

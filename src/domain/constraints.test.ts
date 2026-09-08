@@ -504,6 +504,128 @@ describe("ConstraintEvaluator.evaluate", () => {
     ).toContain("INVALID_CONTEXT");
   });
 
+  it("returns NON_FINITE_VALUE when finite dimensions overflow transformed bounds", () => {
+    const proposed = entity("entity-proposed", 1, 0, 1, {
+      dimensions: {
+        xMetres: metres(1),
+        yMetres: metres(1e308),
+        zMetres: metres(1),
+      },
+      transform: makeTransform({
+        position: vec3(1, 0, 1),
+        rotation: makeQuaternion(0, 0, 0, 1),
+        scale: vec3(1, 2, 1),
+      }),
+    });
+    const hugeRoom = {
+      ...room(),
+      heightMetres: metres(1e308),
+    } as Room;
+
+    expect(() =>
+      ConstraintEvaluator.evaluate(hugeRoom, proposed, emptyContext),
+    ).not.toThrow();
+    expect(
+      codes(ConstraintEvaluator.evaluate(hugeRoom, proposed, emptyContext)),
+    ).toContain("NON_FINITE_VALUE");
+  });
+
+  it("returns NON_FINITE_VALUE when finite clearance expansion overflows", () => {
+    const proposed = device("device-proposed", 5e307, 0, 3, {
+      dimensions: {
+        xMetres: metres(1e308),
+        yMetres: metres(1),
+        zMetres: metres(1),
+      },
+    });
+    const hugeRoom = {
+      ...room(),
+      boundary: {
+        kind: "RECTANGULAR",
+        widthMetres: metres(1e308),
+        depthMetres: metres(8),
+      },
+    } as Room;
+    const deviceRequirement = {
+      ...requirement(proposed.entityId),
+      clearance: {
+        minXMetres: metres(0),
+        maxXMetres: metres(1e308),
+        minYMetres: metres(0),
+        maxYMetres: metres(0),
+        minZMetres: metres(0),
+        maxZMetres: metres(0),
+      },
+    };
+    const context = {
+      ...emptyContext,
+      deviceRequirements: [deviceRequirement],
+    };
+
+    expect(() =>
+      ConstraintEvaluator.evaluate(hugeRoom, proposed, context),
+    ).not.toThrow();
+    expect(
+      codes(ConstraintEvaluator.evaluate(hugeRoom, proposed, context)),
+    ).toContain("NON_FINITE_VALUE");
+  });
+
+  it("returns NON_FINITE_VALUE when a finite connector transform overflows", () => {
+    const proposed = device("device-proposed", 3, 0, 3, {
+      transform: makeTransform({
+        position: vec3(3, 0, 3),
+        rotation: makeQuaternion(0, 0, 0, 1),
+        scale: vec3(2, 1, 1),
+      }),
+    });
+    const context = {
+      ...emptyContext,
+      deviceRequirements: [
+        requirement(proposed.entityId, {
+          state: "REQUIRED",
+          connectorLocalPosition: vec3(metres(1e308), metres(0), metres(0)),
+          cableLengthMetres: metres(1),
+          eligibleOutletIds: [],
+        }),
+      ],
+    };
+
+    expect(() =>
+      ConstraintEvaluator.evaluate(room(), proposed, context),
+    ).not.toThrow();
+    expect(
+      codes(ConstraintEvaluator.evaluate(room(), proposed, context)),
+    ).toContain("NON_FINITE_VALUE");
+  });
+
+  it("returns NON_FINITE_VALUE when a finite outlet delta overflows", () => {
+    const proposed = device("device-proposed", 3, 0, 3);
+    const context: ConstraintContext = {
+      ...emptyContext,
+      deviceRequirements: [
+        requirement(proposed.entityId, {
+          state: "REQUIRED",
+          connectorLocalPosition: vec3(metres(1e308), metres(0), metres(0)),
+          cableLengthMetres: metres(1),
+          eligibleOutletIds: ["outlet-far"],
+        }),
+      ],
+      outlets: [
+        {
+          outletId: "outlet-far",
+          position: vec3(metres(-1e308), metres(0), metres(0)),
+          evidenceIds: ["evidence-outlet" as never],
+          claimIds: [],
+        },
+      ],
+    };
+
+    const report = ConstraintEvaluator.evaluate(room(), proposed, context);
+
+    expect(codes(report)).toContain("NON_FINITE_VALUE");
+    expect(codes(report)).not.toContain("OUTLET_REACH");
+  });
+
   it("rejects malformed provenance reference IDs as INVALID_CONTEXT", () => {
     const proposed = device("device-proposed", 3, 0, 3);
     const malformed = {

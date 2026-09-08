@@ -2,7 +2,11 @@ import type { ClaimId, EntityId, EvidenceId } from "./identity";
 import type { Room, SpatialEntity } from "./project-schema";
 import { applyTransform, vec3, type Vec3 } from "./spatial";
 import { metres, type Metres } from "./units";
-import { boundsForEntity, type AxisAlignedBounds } from "./geometry";
+import {
+  boundsForEntity,
+  NonFiniteGeometryError,
+  type AxisAlignedBounds,
+} from "./geometry";
 
 const GEOMETRIC_TOLERANCE_METRES = 1e-6;
 const ROTATION_TOLERANCE = 1e-7;
@@ -291,19 +295,49 @@ function boundsFitRoom(bounds: AxisAlignedBounds, room: Room): boolean {
 function expandedBounds(
   bounds: AxisAlignedBounds,
   clearance: SixAxisClearance,
-): AxisAlignedBounds {
-  return {
-    min: vec3(
-      metres(bounds.min.x - clearance.minXMetres),
-      metres(bounds.min.y - clearance.minYMetres),
-      metres(bounds.min.z - clearance.minZMetres),
-    ),
-    max: vec3(
-      metres(bounds.max.x + clearance.maxXMetres),
-      metres(bounds.max.y + clearance.maxYMetres),
-      metres(bounds.max.z + clearance.maxZMetres),
-    ),
+): AxisAlignedBounds | null {
+  const values = {
+    minX: bounds.min.x - clearance.minXMetres,
+    minY: bounds.min.y - clearance.minYMetres,
+    minZ: bounds.min.z - clearance.minZMetres,
+    maxX: bounds.max.x + clearance.maxXMetres,
+    maxY: bounds.max.y + clearance.maxYMetres,
+    maxZ: bounds.max.z + clearance.maxZMetres,
   };
+  if (!finiteNumbers(Object.values(values))) {
+    return null;
+  }
+  return {
+    min: vec3(metres(values.minX), metres(values.minY), metres(values.minZ)),
+    max: vec3(metres(values.maxX), metres(values.maxY), metres(values.maxZ)),
+  };
+}
+
+function finiteBoundsForEntity(
+  entity: SpatialEntity,
+): AxisAlignedBounds | null {
+  try {
+    return boundsForEntity(entity);
+  } catch (error) {
+    if (error instanceof NonFiniteGeometryError) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function finiteTransformedPoint(
+  entity: SpatialEntity,
+  point: Vec3<Metres>,
+): Vec3<Metres> | null {
+  try {
+    return applyTransform(entity.transform, point);
+  } catch (error) {
+    if (error instanceof Error && error.message === "metres must be finite") {
+      return null;
+    }
+    throw error;
+  }
 }
 
 function pairKey(code: string, entityIds: readonly string[]): string {
@@ -680,7 +714,14 @@ function evaluate(
     return { isFeasible: false, violations: sorted, warnings };
   }
 
-  const proposedBounds = boundsForEntity(proposedEntity);
+  const proposedBounds = finiteBoundsForEntity(proposedEntity);
+  if (proposedBounds === null) {
+    violations.push(
+      violation(CONSTRAINT_CODES.NON_FINITE_VALUE, [proposedEntity.entityId]),
+    );
+    const sorted = deduplicateViolations(violations).sort(compareReports);
+    return { isFeasible: false, violations: sorted, warnings };
+  }
   if (!boundsFitRoom(proposedBounds, room)) {
     violations.push(
       violation(CONSTRAINT_CODES.ROOM_BOUNDS, [
@@ -719,7 +760,14 @@ function evaluate(
       ) {
         continue;
       }
-      if (boundsOverlap(proposedBounds, boundsForEntity(other))) {
+      const otherBounds = finiteBoundsForEntity(other);
+      if (otherBounds === null) {
+        violations.push(
+          violation(CONSTRAINT_CODES.NON_FINITE_VALUE, [other.entityId]),
+        );
+        continue;
+      }
+      if (boundsOverlap(proposedBounds, otherBounds)) {
         collisionViolations.push(
           violation(CONSTRAINT_CODES.COLLISION, [
             proposedEntity.entityId,
@@ -786,10 +834,25 @@ function evaluate(
       if (entityValidity(candidate).length > 0) {
         continue;
       }
-      const envelope = expandedBounds(
-        boundsForEntity(candidate),
-        requirement.clearance,
-      );
+      const candidateBounds = finiteBoundsForEntity(candidate);
+      if (candidateBounds === null) {
+        violations.push(
+          violation(CONSTRAINT_CODES.NON_FINITE_VALUE, [candidate.entityId]),
+        );
+        continue;
+      }
+      const envelope = expandedBounds(candidateBounds, requirement.clearance);
+      if (envelope === null) {
+        violations.push(
+          violation(
+            CONSTRAINT_CODES.NON_FINITE_VALUE,
+            [candidate.entityId],
+            requirement.evidenceIds,
+            requirement.claimIds,
+          ),
+        );
+        continue;
+      }
       if (!boundsFitRoom(envelope, room)) {
         violations.push(
           violation(
@@ -808,7 +871,14 @@ function evaluate(
         ) {
           continue;
         }
-        if (boundsOverlap(envelope, boundsForEntity(obstacle))) {
+        const obstacleBounds = finiteBoundsForEntity(obstacle);
+        if (obstacleBounds === null) {
+          violations.push(
+            violation(CONSTRAINT_CODES.NON_FINITE_VALUE, [obstacle.entityId]),
+          );
+          continue;
+        }
+        if (boundsOverlap(envelope, obstacleBounds)) {
           violations.push(
             violation(
               CONSTRAINT_CODES.DEVICE_CLEARANCE,
@@ -831,26 +901,58 @@ function evaluate(
         );
       } else if (requirement.outlet.state === "REQUIRED") {
         const outletRequirement = requirement.outlet;
-        const connector = applyTransform(
-          candidate.transform,
+        const connector = finiteTransformedPoint(
+          candidate,
           outletRequirement.connectorLocalPosition,
         );
-        const candidates = outletRequirement.eligibleOutletIds
-          .map((id) => outletById.get(id))
-          .filter((outlet): outlet is OutletLocation => outlet !== undefined)
-          .map((outlet) => ({
-            outlet,
-            distance: Math.hypot(
-              outlet.position.x - connector.x,
-              outlet.position.y - connector.y,
-              outlet.position.z - connector.z,
+        if (connector === null) {
+          violations.push(
+            violation(
+              CONSTRAINT_CODES.NON_FINITE_VALUE,
+              [candidate.entityId],
+              requirement.evidenceIds,
+              requirement.claimIds,
             ),
-          }))
-          .sort(
-            (left, right) =>
-              left.distance - right.distance ||
-              compareCodeUnits(left.outlet.outletId, right.outlet.outletId),
           );
+          continue;
+        }
+        const candidates: Array<{
+          readonly outlet: OutletLocation;
+          readonly distance: number;
+        }> = [];
+        let nonFiniteDistance = false;
+        for (const outletId of outletRequirement.eligibleOutletIds) {
+          const outlet = outletById.get(outletId);
+          if (outlet === undefined) {
+            continue;
+          }
+          const deltas = [
+            outlet.position.x - connector.x,
+            outlet.position.y - connector.y,
+            outlet.position.z - connector.z,
+          ] as const;
+          const distance = finiteNumbers(deltas) ? Math.hypot(...deltas) : NaN;
+          if (!Number.isFinite(distance)) {
+            nonFiniteDistance = true;
+            continue;
+          }
+          candidates.push({ outlet, distance });
+        }
+        candidates.sort(
+          (left, right) =>
+            left.distance - right.distance ||
+            compareCodeUnits(left.outlet.outletId, right.outlet.outletId),
+        );
+        if (nonFiniteDistance) {
+          violations.push(
+            violation(
+              CONSTRAINT_CODES.NON_FINITE_VALUE,
+              [candidate.entityId],
+              requirement.evidenceIds,
+              requirement.claimIds,
+            ),
+          );
+        }
         warnings.push({
           ...warning(
             "STRAIGHT_LINE_CABLE",
@@ -861,9 +963,10 @@ function evaluate(
           outletIds: candidates.map(({ outlet }) => outlet.outletId),
         });
         if (
-          candidates.length === 0 ||
-          candidates[0]!.distance >
-            outletRequirement.cableLengthMetres + GEOMETRIC_TOLERANCE_METRES
+          !nonFiniteDistance &&
+          (candidates.length === 0 ||
+            candidates[0]!.distance >
+              outletRequirement.cableLengthMetres + GEOMETRIC_TOLERANCE_METRES)
         ) {
           violations.push(
             violation(

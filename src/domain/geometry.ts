@@ -7,6 +7,13 @@ export interface AxisAlignedBounds {
   readonly max: Vec3<Metres>;
 }
 
+export class NonFiniteGeometryError extends Error {
+  public constructor() {
+    super("NON_FINITE_GEOMETRY");
+    this.name = "NonFiniteGeometryError";
+  }
+}
+
 export function inverseTransformPoint(
   transform: Transform,
   point: Vec3<Metres>,
@@ -45,10 +52,21 @@ export function boundsForEntity(entity: SpatialEntity): AxisAlignedBounds {
   for (const x of xs) {
     for (const y of ys) {
       for (const z of zs) {
-        const corner = applyTransform(
-          entity.transform,
-          vec3(metres(x), metres(y), metres(z)),
-        );
+        let corner: Vec3<Metres>;
+        try {
+          corner = applyTransform(
+            entity.transform,
+            vec3(metres(x), metres(y), metres(z)),
+          );
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            error.message === "metres must be finite"
+          ) {
+            throw new NonFiniteGeometryError();
+          }
+          throw error;
+        }
         minimumX = Math.min(minimumX, corner.x);
         minimumY = Math.min(minimumY, corner.y);
         minimumZ = Math.min(minimumZ, corner.z);
