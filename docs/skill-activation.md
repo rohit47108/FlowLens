@@ -24,12 +24,12 @@ This ledger maps the requested skills to the phase where their instructions gove
 | vercel-react-best-practices | 1-15 because React was selected | Activated for Phase 1 | Direct imports, lazy heavy modules, derived state, stable component identity, and one-time initialization; no deployment implication. |
 | 3d-web-experience | 0 architecture and Phase 3 implementation | Activated for architecture | R3F/Three selection, semantic geometry, adaptive quality, WebGL fallback. |
 | computer-vision-opencv | 0 architecture and Phase 6 implementation | Activated for architecture | Staged OpenCV.js capability, apparent-motion boundary, fixtures, memory cleanup. |
-| playwright-core | 2 onward; primary in 13-15 | Scheduled | Stable locator/actionability patterns for integrated browser workflows. |
+| playwright-core | Foundation runtime checks; primary in 2 onward and 13-15 | Activated for browser-test preparation | Configuration, isolated fixture teardown, and browser-API guidance read for the Task 7 Node/Chromium fixed-vector gate. Matching Chromium executable is present; actual vector/browser workflow results remain pending. |
 | browser:control-in-app-browser | 2 onward; primary in 12-15 | Scheduled | Inspect the running app, console, network, focus, responsive and recovery states. |
 | code-review-and-quality | Every checkpoint; primary in 13-15 | Activated for foundation checkpoints | Scoped independent specification/quality reviews identified and regression-tested parser, command-replay, and history defects. Full-product release review remains pending. |
 | impeccable | 12 and 15 | Scheduled | Final interface craft pass after full workflows exist. |
 | web-quality-audit | 13 and 15 | Scheduled | Accessibility, performance, security, SEO-applicability, and best-practice audit. |
-| performance-optimization | Foundation hot paths; primary in 14 | Activated for baseline measurement | A partial synthetic causal-helper baseline was captured; the interrupted run is not a performance pass. Complete undo/persistence/UI profiling and Phase 14 regression budgets remain pending. |
+| performance-optimization | Foundation hot paths; primary in 14 | Activated for baseline measurement | Public undo/redo completed a synthetic baseline through 4,094 genuine forward records; large-history synchronous cost is recorded in `docs/research/history-performance-baseline.md`. Receipt-heavy, persistence, browser and Phase 14 regression gates remain pending. |
 | observability-and-instrumentation | 2 foundation, primary in 14 | Scheduled | Privacy-safe product/job diagnostics and performance marks. |
 | shipping-and-launch | 15 | Scheduled | Release readiness, honest limitations, version/changelog and rollback posture. |
 | ci-cd-and-automation | 1 foundation, primary in 13-15 | Scheduled | Reproducible GitHub checks, artifacts, security and performance gates. |
