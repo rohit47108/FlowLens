@@ -37,6 +37,7 @@ This register records the primary sources used for framework, browser, scientifi
 | --- | --- | --- |
 | Use IndexedDB for structured projects and local blobs | [MDN: IndexedDB API](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API) | IndexedDB stores significant structured data and blobs asynchronously, follows same-origin policy, and is available in workers. Browser quota and eviction remain explicit product limitations. |
 | Use Dexie as the IndexedDB adapter | [Dexie: React Tutorial](https://dexie.org/docs/Tutorial/React) | Dexie documents typed databases, versioned stores, React live queries, and the same-origin limitation. Domain repositories do not expose Dexie types. |
+| Keep revision checks and publication in one declared transaction | [Dexie: transaction](https://dexie.org/docs/Dexie/Dexie.transaction()) and [version](https://dexie.org/docs/Dexie/Dexie.version()) | Rechecked 2026-09-07: the transaction promise resolves after commit and rejects on abort; all participating tables must be in scope. IndexedDB auto-commits when requests stop, so hashing, decoding, and peer acknowledgements must finish outside the final publication transaction. Schema versions are declared explicitly. |
 | Run heavy jobs outside the UI thread | [MDN: Web Workers API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API) | Dedicated workers execute laborious work away from the main thread and communicate using messages. FlowLens adds a validated job protocol, cancellation, timeouts, and stale-result rejection. |
 
 ## Computer vision

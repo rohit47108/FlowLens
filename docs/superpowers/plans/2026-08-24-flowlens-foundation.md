@@ -448,21 +448,25 @@ git push
 - Create: `src/persistence/database.ts`
 - Create: `tests/integration/project-repository.test.ts`
 - Create: `tests/setup/indexeddb.ts`
+- Create: `src/domain/local-command-journal.ts`
+- Create: `src/domain/local-command-journal.test.ts`
 
 **Interfaces:**
 
 - Consumes: Task 4 parser and Task 5 revisions.
-- Produces: `ProjectRepository` with `get`, `list`, `create`, fenced `compareAndSwap`, staged operations, `markDeletionPending`, and `deleteAllProjectData`.
+- Produces: `ProjectRepository` with `get`, `openSession`, `list`, `create`, command-bearing fenced `commitMutation`, staged operations, `markDeletionPending`, and `deleteAllProjectData`; plus `rehydrateLocalCommandJournal`.
+- ADR-0009 supersedes the original illustrative raw replacement-project CAS signature. CAS stays an adapter-private primitive. Mutation outcomes expose both the committed result and the current session so an exact historical retry cannot roll the head backward.
 
 ```ts
 export interface ProjectRepository {
   get(projectId: ProjectId): Promise<RepositoryResult<Project>>;
+  openSession(projectId: ProjectId): Promise<RepositoryResult<ProjectSession>>;
   list(): Promise<RepositoryResult<readonly ProjectSummary[]>>;
   create(project: Project): Promise<RepositoryResult<Project>>;
-  compareAndSwap(expected: RevisionId, fence: LeaseFence, project: Project): Promise<RepositoryResult<Project>>;
+  commitMutation(mutation: RepositoryMutation): Promise<RepositoryResult<RepositoryMutationOutcome>>;
   beginStage(projectId: ProjectId, fence: LeaseFence, plan: StagePlan): Promise<RepositoryResult<StageId>>;
   commitStage(stageId: StageId, expected: RevisionId, fence: LeaseFence): Promise<RepositoryResult<Project>>;
-  markDeletionPending(projectId: ProjectId, expected: RevisionId, fence: LeaseFence): Promise<RepositoryResult<LeaseFence>>;
+  markDeletionPending(request: DeletionRequest): Promise<RepositoryResult<DeletionReceipt>>;
   deleteAllProjectData(projectId: ProjectId): Promise<RepositoryResult<void>>;
 }
 ```
@@ -471,9 +475,11 @@ export interface ProjectRepository {
 
 Using fake-indexeddb, prove create/get/list, persisted-record revalidation, duplicate conflict, stale revision/fence conflict, successful atomic revision/audit update, idempotency replay, invisible partial stage, interrupted-stage cleanup, corrupt-record refusal, tombstoned read/write refusal, project-ID resurrection refusal, best-effort peer acknowledgement behavior, and persistent absence verification without claiming peer-RAM erasure.
 
+Also prove local-journal replay regenerates complete committed artifacts/history from its root, refuses corrupt projections, preserves the current session on an exact old-command retry, invalidates history against a newer durable fence, refuses new events at capacity without truncation, and allows terminal deletion/retry at capacity without requiring content replay. `DeletionRequest` includes project ID, expected revision, fence and stable request ID; its durable receipt contains no private content. External package history never gains local replay authority.
+
 - [ ] **Step 2: Prove red**
 
-Run `npm run test -- tests/integration/project-repository.test.ts`.
+Run `npm run test -- tests/integration/project-repository.test.ts src/domain/local-command-journal.test.ts`.
 
 - [ ] **Step 3: Implement the Dexie adapter**
 
@@ -486,7 +492,7 @@ Close/reopen the fake database between writes. Force exceptions during staged ch
 - [ ] **Step 5: Commit and push**
 
 ```powershell
-git add src/persistence/project-repository.ts src/persistence/indexeddb-project-repository.ts src/persistence/database.ts tests/integration/project-repository.test.ts tests/setup/indexeddb.ts
+git add src/persistence/project-repository.ts src/persistence/indexeddb-project-repository.ts src/persistence/database.ts tests/integration/project-repository.test.ts tests/setup/indexeddb.ts src/domain/local-command-journal.ts src/domain/local-command-journal.test.ts
 git commit -m "feat: persist projects with revision checks"
 git push
 ```
